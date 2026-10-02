@@ -6,16 +6,16 @@
     <title>Antigravity Operator — Live Dashboard</title>
     <style>
         :root {
-            --bg-color: #0d1117;
-            --surface-color: #161b22;
-            --border-color: #30363d;
-            --text-main: #f0f6fc;
-            --text-muted: #8b949e;
-            --accent-blue: #58a6ff;
-            --accent-green: #3fb950;
-            --accent-yellow: #d29922;
-            --accent-red: #f85149;
-            --code-bg: #090d13;
+            --bg-color: #09090b;
+            --surface-color: #121215;
+            --border-color: #27272a;
+            --text-main: #f4f4f5;
+            --text-muted: #8e8e93;
+            --accent-blue: #e4e4e7;
+            --accent-green: #22c55e;
+            --accent-yellow: #eab308;
+            --accent-red: #ef4444;
+            --code-bg: #050507;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -29,23 +29,106 @@
 
         header {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            flex-direction: column;
+            gap: 12px;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 16px;
             margin-bottom: 24px;
         }
 
-        .header-title {
+        .header-main-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 14px;
+            width: 100%;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        .header-left h1 {
+            font-size: 1.35rem;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            white-space: nowrap;
+        }
+
+        .header-right {
             display: flex;
             align-items: center;
             gap: 12px;
         }
 
-        .header-title h1 {
-            font-size: 1.4rem;
+        /* Segmented Navigation Tabs */
+        .nav-tabs-group {
+            display: inline-flex;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 3px;
+            gap: 4px;
+            margin-left: 6px;
+        }
+
+        .nav-tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 0.82rem;
             font-weight: 600;
-            letter-spacing: -0.5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .nav-tab-btn:hover:not(.active) {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-tab-btn.active {
+            background: #27272a;
+            color: #ffffff;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        /* Scope Context Row */
+        .header-scope-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            width: 100%;
+            font-size: 0.78rem;
+        }
+
+        .scope-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            padding: 3px 10px;
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .scope-chip strong {
+            color: var(--text-main);
+            font-weight: 600;
         }
 
         .pulse-badge {
@@ -169,18 +252,283 @@
             color: var(--text-muted);
             padding: 4px 0;
         }
+
+        .tool-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.82rem;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            margin: 4px 6px 4px 0;
+        }
+
+        .tool-pill strong {
+            color: var(--accent-blue);
+        }
+
+        .alert-box {
+            margin-top: 10px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .alert-warn {
+            background: rgba(210, 153, 34, 0.15);
+            border: 1px solid rgba(210, 153, 34, 0.4);
+            color: var(--accent-yellow);
+        }
+
+        .alert-clean {
+            background: rgba(63, 185, 80, 0.15);
+            border: 1px solid rgba(63, 185, 80, 0.4);
+            color: var(--accent-green);
+        }
+
+        .metric-badge {
+            display: inline-flex;
+            flex-direction: column;
+            padding: 8px 14px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .metric-val {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .metric-lbl {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Tool Analytics & Explorer */
+        .analytics-ratio-bar {
+            height: 10px;
+            display: flex;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #27272a;
+            margin: 12px 0 18px 0;
+        }
+        .ratio-segment {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        .ratio-auto { background: #e4e4e7; }
+        .ratio-prompt { background: #71717a; }
+        .ratio-fail { background: #ef4444; }
+
+        .filter-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+            margin: 16px 0 12px 0;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .filter-btn-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .filter-btn {
+            background: #18181b;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        .filter-btn:hover {
+            border-color: #71717a;
+            background: #27272a;
+        }
+        .filter-btn.active {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+        .filter-select {
+            background: #18181b;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            outline: none;
+        }
+        .search-input {
+            background: #18181b;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            outline: none;
+            min-width: 220px;
+        }
+        .search-input:focus {
+            border-color: #a1a1aa;
+        }
+
+        .tool-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 480px;
+            overflow-y: auto;
+            margin-top: 10px;
+            padding-right: 4px;
+        }
+        .tool-item {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 14px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .tool-item:hover {
+            border-color: #52525b;
+            background: #18181b;
+        }
+        .tool-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .tool-item-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .badge-mode {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .mode-auto {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+        .mode-prompt {
+            background: rgba(255, 255, 255, 0.05);
+            color: #a1a1aa;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .badge-status {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        .status-ok {
+            background: rgba(34, 197, 94, 0.12);
+            color: var(--accent-green);
+            border: 1px solid rgba(34, 197, 94, 0.25);
+        }
+        .status-err {
+            background: rgba(239, 68, 68, 0.12);
+            color: var(--accent-red);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+        .tool-item-summary {
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-size: 0.82rem;
+            color: var(--text-main);
+            margin-top: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .tool-item-details {
+            display: none;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #21262d;
+            font-size: 0.8rem;
+        }
+        .tool-item.open .tool-item-details {
+            display: block;
+        }
+        .detail-row {
+            margin-bottom: 8px;
+        }
+        .detail-label {
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+        }
+        .detail-code {
+            background: #090d13;
+            border: 1px solid #21262d;
+            border-radius: 4px;
+            padding: 6px 10px;
+            margin-top: 4px;
+            font-family: ui-monospace, monospace;
+            word-break: break-all;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
     <header>
-        <div class="header-title">
-            <h1>⚡ Antigravity Operator</h1>
-            <span class="pulse-badge"><span class="pulse-dot"></span> LIVE DASHBOARD</span>
+        <div class="header-main-row">
+            <div class="header-left">
+                <h1>⚡ Antigravity Operator</h1>
+                <span class="pulse-badge"><span class="pulse-dot"></span> LIVE DASHBOARD</span>
+
+                <div class="nav-tabs-group">
+                    <button id="tab-host" class="nav-tab-btn" onclick="switchMainTab('host')">🖥️ Host Overview</button>
+                    <button id="tab-analytics" class="nav-tab-btn active" onclick="switchMainTab('analytics')">🛠️ Tool Analytics & Loops</button>
+                </div>
+            </div>
+
+            <div class="header-right">
+                <button id="live-toggle-btn" class="filter-btn" onclick="toggleLiveStream()">⏸️ Pause Updates</button>
+                <div id="last-update" style="font-size: 0.8rem; color: var(--text-muted);">Conectando...</div>
+            </div>
         </div>
-        <div id="last-update" style="font-size: 0.8rem; color: var(--text-muted);">Conectando...</div>
+
+        <div class="header-scope-row">
+            <div class="scope-chip">📁 Workspace: <strong id="scope-workspace">Detecting...</strong></div>
+            <div class="scope-chip">Session: <strong id="scope-session-id">...</strong></div>
+            <div id="scope-mismatch-hint" class="scope-chip" style="display: none; color: var(--accent-yellow); border-color: rgba(210, 153, 34, 0.4);">
+                <span>ℹ️ Host Daemon: <strong id="scope-host-cwd" style="color: var(--accent-yellow);"></strong></span>
+            </div>
+        </div>
     </header>
 
-    <div class="grid">
+    <!-- View 1: Host Overview (Tiago's original 4 cards, completely untouched) -->
+    <div class="grid" id="host-view" style="display: none;">
         <!-- Card 1: Sessão Ativa -->
         <div class="card">
             <h2>🎯 Sessão & Memória Operacional</h2>
@@ -212,6 +560,16 @@
         </div>
     </div>
 
+    <!-- View 2: Dedicated Tool Analytics & Efficiency Dashboard -->
+    <div id="analytics-view">
+        <div class="card">
+            <h2>🛠️ Tool Call Analytics & Efficiency Alerts</h2>
+            <div id="analytics-content">
+                <p style="color: var(--text-muted);">Analyzing active session tool calls...</p>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Session, doctor, tab and transcript strings are untrusted: escape before any innerHTML.
         function escapeHtml(value) {
@@ -233,22 +591,133 @@
             }
         }
 
+        let isPaused = false;
+        let lastSessionJSON = '';
+        let lastDoctorJSON = '';
+        let lastTabsJSON = '';
+        let lastEventsJSON = '';
+        let lastAnalyticsJSON = '';
+
+        let activeFilter = 'all';
+        let activeToolSelect = 'all';
+        let searchQuery = '';
+        const openToolIds = new Set();
+        let cachedAnalytics = null;
+
+        function toggleLiveStream() {
+            isPaused = !isPaused;
+            const btn = document.getElementById('live-toggle-btn');
+            if (btn) {
+                if (isPaused) {
+                    btn.innerHTML = '▶️ Resume Updates';
+                    btn.classList.add('active');
+                } else {
+                    btn.innerHTML = '⏸️ Pause Updates';
+                    btn.classList.remove('active');
+                    fetchDashboardData();
+                }
+            }
+        }
+
+        function switchMainTab(view) {
+            const hostBtn = document.getElementById('tab-host');
+            const analyticsBtn = document.getElementById('tab-analytics');
+            const hostView = document.getElementById('host-view');
+            const analyticsView = document.getElementById('analytics-view');
+
+            if (!hostBtn || !analyticsBtn || !hostView || !analyticsView) return;
+
+            if (view === 'host') {
+                hostBtn.classList.add('active');
+                analyticsBtn.classList.remove('active');
+                hostView.style.display = 'grid';
+                analyticsView.style.display = 'none';
+                history.replaceState(null, '', '#host');
+            } else {
+                analyticsBtn.classList.add('active');
+                hostBtn.classList.remove('active');
+                analyticsView.style.display = 'block';
+                hostView.style.display = 'none';
+                history.replaceState(null, '', '#analytics');
+            }
+        }
+
         async function fetchDashboardData() {
+            if (isPaused) return;
             try {
                 const res = await fetch('/api/all');
                 if (!res.ok) throw new Error('Falha na resposta: ' + res.status);
                 const data = await res.json();
                 renderDashboard(data);
                 document.getElementById('last-update').innerText = 'Última sincronização: ' + new Date().toLocaleTimeString();
+
+                // Update scope chips
+                const activeWorkspace = (data.analytics && data.analytics.workspace) || data.host_dir || 'Detecting...';
+                const wsEl = document.getElementById('scope-workspace');
+                if (wsEl) wsEl.innerText = activeWorkspace;
+
+                if (data.analytics && data.analytics.conversation_id) {
+                    const sessEl = document.getElementById('scope-session-id');
+                    if (sessEl) sessEl.innerText = data.analytics.conversation_id.slice(0, 8);
+                }
+
+                // Subtle mismatch hint if daemon was launched from another repo
+                const mismatchEl = document.getElementById('scope-mismatch-hint');
+                const hostEl = document.getElementById('scope-host-cwd');
+                if (mismatchEl && hostEl && data.host_dir) {
+                    if (data.analytics && data.analytics.workspace && data.analytics.workspace !== data.host_dir) {
+                        mismatchEl.style.display = 'inline-flex';
+                        hostEl.innerText = data.host_dir;
+                    } else {
+                        mismatchEl.style.display = 'none';
+                    }
+                }
             } catch (err) {
                 document.getElementById('last-update').innerHTML = '<span style="color: var(--accent-red)">⚠️ Erro ao atualizar dados</span>';
             }
         }
 
         function renderDashboard(data) {
-            // Render Session
-            const s = data.session;
+            // Render Session with change detection
+            const sessionJSON = JSON.stringify(data.session);
+            if (sessionJSON !== lastSessionJSON) {
+                lastSessionJSON = sessionJSON;
+                renderSession(data.session);
+            }
+
+            // Render Doctor with change detection
+            const doctorJSON = JSON.stringify(data.doctor);
+            if (doctorJSON !== lastDoctorJSON) {
+                lastDoctorJSON = doctorJSON;
+                renderDoctor(data.doctor);
+            }
+
+            // Render Tabs with change detection
+            const tabsJSON = JSON.stringify(data.tabs);
+            if (tabsJSON !== lastTabsJSON) {
+                lastTabsJSON = tabsJSON;
+                renderTabs(data.tabs);
+            }
+
+            // Render Events with change detection
+            const eventsJSON = JSON.stringify(data.events);
+            if (eventsJSON !== lastEventsJSON) {
+                lastEventsJSON = eventsJSON;
+                renderEvents(data.events);
+            }
+
+            // Render Tool Analytics with change detection
+            const analyticsJSON = JSON.stringify(data.analytics);
+            if (analyticsJSON !== lastAnalyticsJSON) {
+                lastAnalyticsJSON = analyticsJSON;
+                cachedAnalytics = data.analytics;
+                renderAnalyticsSection(data.analytics);
+            }
+        }
+
+        function renderSession(s) {
             const sDiv = document.getElementById('session-content');
+            if (!sDiv) return;
             if (s && s.active) {
                 let pendingHtml = '';
                 if (s.pendingList && s.pendingList.length > 0) {
@@ -270,10 +739,11 @@
             } else {
                 sDiv.innerHTML = '<p style="color: var(--text-muted);">Nenhuma sessão ativa encontrada. Execute <code>agyo init</code>.</p>';
             }
+        }
 
-            // Render Doctor
-            const doc = data.doctor;
+        function renderDoctor(doc) {
             const dDiv = document.getElementById('doctor-content');
+            if (!dDiv) return;
             if (doc && doc.checks) {
                 dDiv.innerHTML = doc.checks.map(c => {
                     let icon = '✅';
@@ -292,11 +762,12 @@
                     `;
                 }).join('');
             }
+        }
 
-            // Render Tabs
-            const tabs = data.tabs || [];
+        function renderTabs(tabs) {
             const tDiv = document.getElementById('tabs-content');
-            if (tabs.length > 0) {
+            if (!tDiv) return;
+            if (tabs && tabs.length > 0) {
                 tDiv.innerHTML = tabs.map(t => {
                     const href = safeHttpUrl(t.url);
                     const urlHtml = href
@@ -312,15 +783,304 @@
             } else {
                 tDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">Nenhuma aba aberta ou Chrome DevTools inativo na porta 9222.<br>Execute <code>agyo browser start</code> para iniciar.</p>';
             }
+        }
 
-            // Render Events
-            const evts = data.events || [];
+        function renderEvents(evts) {
             const eDiv = document.getElementById('events-content');
-            if (evts.length > 0) {
+            if (!eDiv) return;
+            if (evts && evts.length > 0) {
+                const wasScrolledToBottom = eDiv.scrollHeight - eDiv.clientHeight <= eDiv.scrollTop + 20;
                 eDiv.innerHTML = evts.map(e => `<div class="event-line">${escapeHtml(e)}</div>`).join('');
+                if (wasScrolledToBottom) {
+                    eDiv.scrollTop = eDiv.scrollHeight;
+                }
             } else {
                 eDiv.innerHTML = 'Aguardando atividade do agente no Antigravity Brain...';
             }
+        }
+
+        function setFilter(mode) {
+            activeFilter = mode;
+            document.querySelectorAll('.filter-btn-group .filter-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-filter') === mode);
+            });
+            if (cachedAnalytics) renderToolList(cachedAnalytics);
+        }
+
+        function setToolSelect(tool) {
+            activeToolSelect = tool;
+            const selectEl = document.getElementById('tool-filter-select');
+            if (selectEl) selectEl.value = tool;
+            if (cachedAnalytics) renderToolList(cachedAnalytics);
+        }
+
+        function handleSearch(q) {
+            searchQuery = q.toLowerCase();
+            if (cachedAnalytics) renderToolList(cachedAnalytics);
+        }
+
+        function toggleToolDetail(id, el) {
+            const item = el || document.getElementById('tool-item-' + id);
+            if (openToolIds.has(id)) {
+                openToolIds.delete(id);
+                if (item) {
+                    item.classList.remove('open');
+                    const arrow = item.querySelector('.tool-toggle-arrow');
+                    if (arrow) arrow.innerText = '▼';
+                }
+            } else {
+                openToolIds.add(id);
+                if (item) {
+                    item.classList.add('open');
+                    const arrow = item.querySelector('.tool-toggle-arrow');
+                    if (arrow) arrow.innerText = '▲';
+                }
+            }
+        }
+
+        function renderAnalyticsSection(a) {
+            const aDiv = document.getElementById('analytics-content');
+            if (!aDiv) return;
+            if (!a) {
+                aDiv.innerHTML = '<p style="color: var(--text-muted);">No transcript available to analyze tool calls.</p>';
+                return;
+            }
+
+            let durationStr = 'N/A';
+            if (a.duration_seconds > 0) {
+                const mins = Math.floor(a.duration_seconds / 60);
+                const secs = Math.floor(a.duration_seconds % 60);
+                durationStr = Number(mins) + 'm ' + Number(secs) + 's';
+            }
+
+            const total = a.total_tool_calls || 0;
+            const autoCount = a.autonomous_tool_calls || 0;
+            const promptCount = a.prompted_tool_calls || 0;
+            const failCount = a.failed_tool_calls || 0;
+
+            const autoPct = total > 0 ? Math.round((autoCount * 100) / total) : 0;
+            const promptPct = total > 0 ? Math.round((promptCount * 100) / total) : 0;
+            const failPct = total > 0 ? Math.round((failCount * 100) / total) : 0;
+
+            let metricsHtml = `
+                <div style="display: flex; flex-wrap: wrap; margin-bottom: 8px;">
+                    <div class="metric-badge">
+                        <span class="metric-val" style="color: var(--text-main);">${Number(total)}</span>
+                        <span class="metric-lbl">Total Tool Calls</span>
+                    </div>
+                    <div class="metric-badge">
+                        <span class="metric-val" style="color: var(--text-main);">${Number(autoCount)} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">(${Number(autoPct)}%)</span></span>
+                        <span class="metric-lbl">⚡ Autonomous Loops</span>
+                    </div>
+                    <div class="metric-badge">
+                        <span class="metric-val" style="color: var(--text-muted);">${Number(promptCount)} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">(${Number(promptPct)}%)</span></span>
+                        <span class="metric-lbl">👤 User Prompted</span>
+                    </div>
+                    <div class="metric-badge">
+                        <span class="metric-val" style="color: ${escapeHtml(failCount > 0 ? 'var(--accent-red)' : 'var(--text-muted)')};">${Number(failCount)} <span style="font-size: 0.8rem; font-weight: normal;">(${Number(failPct)}%)</span></span>
+                        <span class="metric-lbl">❌ Failed Calls</span>
+                    </div>
+                    <div class="metric-badge">
+                        <span class="metric-val">${Number(a.total_steps)}</span>
+                        <span class="metric-lbl">Total Steps</span>
+                    </div>
+                    <div class="metric-badge">
+                        <span class="metric-val">${escapeHtml(durationStr)}</span>
+                        <span class="metric-lbl">Session Elapsed</span>
+                    </div>
+                </div>
+
+                <div class="analytics-ratio-bar">
+                    <div class="ratio-segment ratio-auto" style="width: ${Number(autoPct)}%" title="Autonomous Loops: ${Number(autoPct)}%"></div>
+                    <div class="ratio-segment ratio-prompt" style="width: ${Number(promptPct)}%" title="User Prompted: ${Number(promptPct)}%"></div>
+                    <div class="ratio-segment ratio-fail" style="width: ${Number(failPct)}%" title="Failed Calls: ${Number(failPct)}%"></div>
+                </div>
+            `;
+
+            let toolsHtml = '<div style="margin-bottom: 14px;"><strong>Tool Call Breakdown:</strong><div style="margin-top: 6px;">';
+            const toolEntries = Object.entries(a.tool_counts || {}).sort((x, y) => y[1] - x[1]);
+            if (toolEntries.length > 0) {
+                toolsHtml += toolEntries.map(([tName, tCount]) => {
+                    const pct = total > 0 ? Math.round((tCount * 100) / total) : 0;
+                    return `<span class="tool-pill tool-pill-clickable" style="cursor: pointer;" data-tool="${escapeHtml(tName)}"><span>${escapeHtml(tName)}</span> <strong>${Number(tCount)}</strong> <span style="color: var(--text-muted); font-size: 0.72rem;">(${Number(pct)}%)</span></span>`;
+                }).join('');
+            } else {
+                toolsHtml += '<span style="color: var(--text-muted); font-size: 0.85rem;">No tool calls detected</span>';
+            }
+            toolsHtml += '</div></div>';
+
+            let alertsHtml = '<div style="margin-bottom: 16px;"><strong>Efficiency & Loop Alerts:</strong>';
+            const repList = a.repetitions ? [...a.repetitions] : [];
+            repList.sort((x, y) => {
+                if (y.count !== x.count) return y.count - x.count;
+                if (x.type !== y.type) return x.type.localeCompare(y.type);
+                return (x.target || '').localeCompare(y.target || '');
+            });
+            if (repList.length === 0) {
+                alertsHtml += '<div class="alert-box alert-clean"><span>✅</span> No repetitive loops or polling detected. Session executing cleanly.</div>';
+            } else {
+                alertsHtml += repList.map(r => `
+                    <div class="alert-box alert-warn">
+                        <span>⚠️</span>
+                        <div>
+                            <strong>${escapeHtml(r.type.toUpperCase())}:</strong> ${escapeHtml(r.message)}
+                        </div>
+                    </div>
+                `).join('');
+            }
+            alertsHtml += '</div>';
+
+            // Ensure static mount points exist without tearing down search input or list scroll
+            let summaryContainer = document.getElementById('analytics-summary-container');
+            let toolbarContainer = document.getElementById('analytics-toolbar-container');
+            let listContainer = document.getElementById('tool-list-container');
+
+            if (!summaryContainer || !toolbarContainer || !listContainer) {
+                aDiv.innerHTML = `
+                    <div id="analytics-summary-container"></div>
+                    <div id="analytics-toolbar-container"></div>
+                    <div id="tool-list-container"></div>
+                `;
+                summaryContainer = document.getElementById('analytics-summary-container');
+                toolbarContainer = document.getElementById('analytics-toolbar-container');
+                listContainer = document.getElementById('tool-list-container');
+            }
+
+            summaryContainer.innerHTML = metricsHtml + toolsHtml + alertsHtml;
+            renderToolbar(a, toolbarContainer);
+            renderToolList(a);
+        }
+
+        function renderToolbar(a, container) {
+            const toolCalls = a.tool_calls || [];
+            const toolOptions = Object.keys(a.tool_counts || {}).sort();
+
+            const existingInput = document.getElementById('tool-search-input');
+            const currentSearch = existingInput ? existingInput.value : searchQuery;
+
+            let optionsHtml = '';
+            for (let i = 0; i < toolOptions.length; i++) {
+                const t = toolOptions[i];
+                const isSel = (activeToolSelect === t) ? 'selected' : '';
+                optionsHtml += '<option value="' + escapeHtml(t) + '" ' + escapeHtml(isSel) + '>' + escapeHtml(t) + ' (' + Number(a.tool_counts[t]) + ')</option>';
+            }
+
+            container.innerHTML = `
+                <div class="filter-toolbar">
+                    <div class="filter-btn-group">
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'all' ? 'active' : '')}" data-filter="all" onclick="setFilter('all')">All Calls (${Number(toolCalls.length)})</button>
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'autonomous' ? 'active' : '')}" data-filter="autonomous" onclick="setFilter('autonomous')">⚡ Autonomous (${Number(a.autonomous_tool_calls || 0)})</button>
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'prompted' ? 'active' : '')}" data-filter="prompted" onclick="setFilter('prompted')">👤 User Prompted (${Number(a.prompted_tool_calls || 0)})</button>
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'failed' ? 'active' : '')}" data-filter="failed" onclick="setFilter('failed')">❌ Failed (${Number(a.failed_tool_calls || 0)})</button>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                        <select id="tool-filter-select" class="filter-select" onchange="setToolSelect(this.value)">
+                            <option value="all" ${escapeHtml(activeToolSelect === 'all' ? 'selected' : '')}>All Tools</option>
+                            ${optionsHtml}
+                        </select>
+                        <input type="text" id="tool-search-input" class="search-input" placeholder="🔍 Search command, target file, args..." value="${escapeHtml(currentSearch)}" oninput="handleSearch(this.value)" />
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderToolList(a) {
+            const container = document.getElementById('tool-list-container');
+            if (!container) return;
+
+            // Preserve scroll position within tool list
+            const existingList = container.querySelector('.tool-list');
+            const savedScrollTop = existingList ? existingList.scrollTop : 0;
+
+            const toolCalls = a.tool_calls || [];
+            const filtered = toolCalls.filter(c => {
+                if (activeFilter === 'autonomous' && !c.is_autonomous) return false;
+                if (activeFilter === 'prompted' && !c.is_prompt_triggered) return false;
+                if (activeFilter === 'failed' && !c.is_failed) return false;
+                if (activeToolSelect !== 'all' && c.tool !== activeToolSelect) return false;
+                if (searchQuery) {
+                    const haystack = (c.tool + ' ' + (c.command || '') + ' ' + (c.target_file || '') + ' ' + (c.summary || '') + ' ' + (c.user_prompt_context || '')).toLowerCase();
+                    if (!haystack.includes(searchQuery)) return false;
+                }
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div style="padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.9rem;">No tool calls matched the selected filters.</div>';
+                return;
+            }
+
+            container.innerHTML = '<div class="tool-list">' + filtered.map(c => {
+                const isOpen = openToolIds.has(c.id);
+                let timeFormatted = '';
+                if (c.timestamp) {
+                    try { timeFormatted = new Date(c.timestamp).toLocaleTimeString(); } catch (e) {}
+                }
+                let durHtml = '';
+                if (c.duration_seconds > 0) {
+                    durHtml = '<span style="font-size: 0.72rem; color: var(--text-muted);">' + escapeHtml(c.duration_seconds.toFixed(1)) + 's</span>';
+                }
+                let promptCtxHtml = '';
+                if (c.user_prompt_context) {
+                    promptCtxHtml = '<div class="detail-row"><span class="detail-label">Context User Request:</span><div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 3px;">💬 "' + escapeHtml(c.user_prompt_context) + '"</div></div>';
+                }
+                let cmdHtml = '';
+                if (c.command) {
+                    cmdHtml = '<div class="detail-row"><span class="detail-label">Command Line:</span><div class="detail-code">' + escapeHtml(c.command) + '</div></div>';
+                }
+                let fileHtml = '';
+                if (c.target_file) {
+                    fileHtml = '<div class="detail-row"><span class="detail-label">Target File:</span><div class="detail-code">' + escapeHtml(c.target_file) + '</div></div>';
+                }
+                let failHtml = '';
+                if (c.is_failed && c.failure_reason) {
+                    failHtml = '<div class="detail-row"><span class="detail-label" style="color: var(--accent-red)">Failure Reason:</span><div class="detail-code" style="color: var(--accent-red); border-color: rgba(248,81,73,0.4);">' + escapeHtml(c.failure_reason) + '</div></div>';
+                }
+
+                return `
+                    <div id="tool-item-${Number(c.id)}" class="tool-item ${escapeHtml(isOpen ? 'open' : '')}" onclick="toggleToolDetail(${Number(c.id)}, this)">
+                        <div class="tool-item-header">
+                            <div class="tool-item-left">
+                                <span style="color: var(--text-muted); font-size: 0.75rem; font-family: monospace;">#${Number(c.step_index)}</span>
+                                <span class="tool-pill" style="margin: 0; padding: 2px 8px;"><strong>${escapeHtml(c.tool)}</strong></span>
+                                <span class="badge-mode ${escapeHtml(c.is_prompt_triggered ? 'mode-prompt' : 'mode-auto')}">${escapeHtml(c.is_prompt_triggered ? '👤 Prompt-Triggered' : '⚡ Autonomous')}</span>
+                                <span class="badge-status ${escapeHtml(c.is_failed ? 'status-err' : 'status-ok')}">${escapeHtml(c.is_failed ? '❌ Failed' : '✅ Success')}</span>
+                                ${durHtml}
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(timeFormatted)}</span>
+                                <span class="tool-toggle-arrow" style="color: var(--text-muted); font-size: 0.8rem;">${escapeHtml(isOpen ? '▲' : '▼')}</span>
+                            </div>
+                        </div>
+                        <div class="tool-item-summary">${escapeHtml(c.summary || c.command || c.tool)}</div>
+                        <div class="tool-item-details">
+                            ${promptCtxHtml}
+                            ${cmdHtml}
+                            ${fileHtml}
+                            ${failHtml}
+                        </div>
+                    </div>
+                `;
+            }).join('') + '</div>';
+
+            // Restore scroll position
+            const newList = container.querySelector('.tool-list');
+            if (newList && savedScrollTop > 0) {
+                newList.scrollTop = savedScrollTop;
+            }
+        }
+
+        document.addEventListener('click', function(e) {
+            const pill = e.target.closest('.tool-pill-clickable');
+            if (pill && pill.dataset.tool) {
+                setToolSelect(pill.dataset.tool);
+            }
+        });
+
+        if (window.location.hash === '#analytics') {
+            switchMainTab('analytics');
+        } else {
+            switchMainTab('host');
         }
 
         fetchDashboardData();

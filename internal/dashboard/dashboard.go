@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
+	"github.com/tiagoboas/antigravity-operator/internal/analytics"
 	"github.com/tiagoboas/antigravity-operator/internal/doctor"
 	"github.com/tiagoboas/antigravity-operator/internal/platform"
 	"github.com/tiagoboas/antigravity-operator/internal/profile"
@@ -36,20 +39,28 @@ type Server struct {
 	cfg      Config
 	server   *http.Server
 	listener net.Listener
+
+	analyticsMu     sync.Mutex
+	cachedAnalytics *analytics.SessionAnalytics
+	cachedMtime     time.Time
+	cachedSize      int64
+	cachedPath      string
 }
 
 // ConsolidatedData agrupa todos os dados para consumo da UI em 1 requisição.
 type ConsolidatedData struct {
-	Timestamp time.Time              `json:"timestamp"`
-	Session   map[string]interface{} `json:"session"`
-	Doctor    map[string]interface{} `json:"doctor"`
-	Tabs      []profile.Tab          `json:"tabs"`
-	Events    []string               `json:"events"`
+	Timestamp time.Time                   `json:"timestamp"`
+	HostDir   string                      `json:"host_dir"`
+	Session   map[string]interface{}      `json:"session"`
+	Doctor    map[string]interface{}      `json:"doctor"`
+	Tabs      []profile.Tab               `json:"tabs"`
+	Events    []string                    `json:"events"`
+	Analytics *analytics.SessionAnalytics `json:"analytics,omitempty"`
 }
 
 // NewServer inicializa o servidor de dashboard com suas rotas.
 func NewServer(cfg Config) (*Server, error) {
-	if cfg.Port <= 0 {
+	if cfg.Port < 0 {
 		cfg.Port = 8080
 	}
 	if cfg.TargetDir == "" {
@@ -81,14 +92,39 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/doctor", s.handleDoctor)
 	mux.HandleFunc("/api/tabs", s.handleTabs)
 	mux.HandleFunc("/api/events", s.handleEvents)
+	mux.HandleFunc("/api/analytics", s.handleAnalytics)
 
 	s.server = &http.Server{
-		Handler:      mux,
+		Handler:      s.securityMiddleware(mux),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
 	return s, nil
+}
+
+func (s *Server) securityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if host != "localhost" && host != "127.0.0.1" {
+			http.Error(w, "Forbidden: invalid host header", http.StatusForbidden)
+			return
+		}
+
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1") {
+				http.Error(w, "Forbidden: cross-origin access forbidden", http.StatusForbidden)
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Addr retorna o endereço TCP resolvido do listener.
@@ -145,12 +181,23 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAll(w http.ResponseWriter, r *http.Request) {
+	hostCwd, _ := os.Getwd()
+	if s.cfg.TargetDir != "" && s.cfg.TargetDir != "." {
+		if abs, err := filepath.Abs(s.cfg.TargetDir); err == nil {
+			hostCwd = abs
+		} else {
+			hostCwd = s.cfg.TargetDir
+		}
+	}
+
 	data := ConsolidatedData{
 		Timestamp: time.Now(),
+		HostDir:   hostCwd,
 		Session:   s.getSessionData(),
 		Doctor:    s.getDoctorData(),
 		Tabs:      s.getTabsData(),
 		Events:    s.getEventsData(),
+		Analytics: s.getAnalyticsData(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -175,6 +222,59 @@ func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.getEventsData())
+}
+
+func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	data := s.getAnalyticsData()
+	if data == nil {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no active transcript found"}`))
+		return
+	}
+	_ = json.NewEncoder(w).Encode(data)
+}
+
+func (s *Server) getAnalyticsData() *analytics.SessionAnalytics {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	geminiDir := filepath.Join(home, ".gemini")
+	tInfo, err := watcher.FindActiveTranscript(geminiDir)
+	if err != nil {
+		return nil
+	}
+
+	fi, err := os.Stat(tInfo.Path)
+	if err != nil {
+		return nil
+	}
+
+	s.analyticsMu.Lock()
+	defer s.analyticsMu.Unlock()
+
+	if s.cachedAnalytics != nil && s.cachedPath == tInfo.Path && fi.ModTime().Equal(s.cachedMtime) && fi.Size() == s.cachedSize {
+		return s.cachedAnalytics
+	}
+
+	sa, err := analytics.AnalyzeTranscript(tInfo.Path)
+	if err != nil {
+		return nil
+	}
+	sa.ConversationID = tInfo.ConversationID
+
+	// Cap tool calls for dashboard payload to latest 100 while keeping full session aggregate metrics
+	if len(sa.ToolCalls) > 100 {
+		sa.ToolCalls = sa.ToolCalls[len(sa.ToolCalls)-100:]
+	}
+
+	s.cachedAnalytics = sa
+	s.cachedMtime = fi.ModTime()
+	s.cachedSize = fi.Size()
+	s.cachedPath = tInfo.Path
+
+	return sa
 }
 
 func (s *Server) getSessionData() map[string]interface{} {

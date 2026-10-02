@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/tiagoboas/antigravity-operator/internal/analytics"
 	"github.com/tiagoboas/antigravity-operator/internal/checkpoint"
 	"github.com/tiagoboas/antigravity-operator/internal/completion"
 	"github.com/tiagoboas/antigravity-operator/internal/dashboard"
@@ -89,6 +91,7 @@ Available commands:
   session restore [f] Restore a past archived session into active memory with automatic backup
   session watch       Stream active agent reasoning and desktop notifications in real time
   session export      Export consolidated session report in markdown or HTML format
+  session analytics   Analyze active session tool call usage, frequencies, and loop detection
   checkpoint [name]   Create an atomic filesystem snapshot before risky refactoring
   rollback [id]       Safely undo agent edits and restore exact working tree from a checkpoint
   dashboard           Launch local web dashboard for live monitoring and DevTools inspection
@@ -287,9 +290,101 @@ func runSession(info *platform.Info, args []string) {
 	case "export":
 		runSessionExport(info, args[1:])
 
+	case "analytics":
+		runSessionAnalytics(args[1:])
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown session subcommand: %s\n", sub)
 		os.Exit(1)
+	}
+}
+
+func runSessionAnalytics(args []string) {
+	analyticsCmd := flag.NewFlagSet("session analytics", flag.ExitOnError)
+	jsonOut := analyticsCmd.Bool("json", false, "Output analytics as JSON")
+	autonomous := analyticsCmd.Bool("autonomous", false, "Filter to show only autonomous loop tool calls")
+	prompted := analyticsCmd.Bool("prompted", false, "Filter to show only prompt-triggered tool calls")
+	failed := analyticsCmd.Bool("failed", false, "Filter to show only failed tool calls")
+	toolName := analyticsCmd.String("tool", "", "Filter to show only calls for a specific tool (e.g. run_command)")
+	_ = analyticsCmd.Parse(args)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error locating home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	geminiDir := filepath.Join(home, ".gemini")
+
+	var transcriptPath string
+	var conversationID string
+
+	if analyticsCmd.NArg() > 0 {
+		target := analyticsCmd.Arg(0)
+		if fi, err := os.Stat(target); err == nil && !fi.IsDir() {
+			transcriptPath = target
+			conversationID = filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(target))))
+		} else {
+			candidates := []string{
+				filepath.Join(geminiDir, "brain", target, ".system_generated", "logs", "transcript.jsonl"),
+				filepath.Join(geminiDir, "antigravity-cli", "brain", target, ".system_generated", "logs", "transcript.jsonl"),
+				filepath.Join(geminiDir, "antigravity", "brain", target, ".system_generated", "logs", "transcript.jsonl"),
+			}
+			for _, c := range candidates {
+				if _, err := os.Stat(c); err == nil {
+					transcriptPath = c
+					conversationID = target
+					break
+				}
+			}
+			if transcriptPath == "" {
+				fmt.Fprintf(os.Stderr, "Error: could not find transcript for %q\n", target)
+				os.Exit(1)
+			}
+		}
+	} else {
+		tInfo, err := watcher.FindActiveTranscript(geminiDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error discovering active transcript: %v\n", err)
+			os.Exit(1)
+		}
+		transcriptPath = tInfo.Path
+		conversationID = tInfo.ConversationID
+	}
+
+	sa, err := analytics.AnalyzeTranscript(transcriptPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error analyzing transcript %s: %v\n", transcriptPath, err)
+		os.Exit(1)
+	}
+	sa.ConversationID = conversationID
+
+	filterOpts := analytics.FilterOptions{
+		AutonomousOnly: *autonomous,
+		PromptedOnly:   *prompted,
+		FailedOnly:     *failed,
+		ToolFilter:     *toolName,
+	}
+
+	hasFilter := *autonomous || *prompted || *failed || *toolName != ""
+
+	if *jsonOut {
+		if hasFilter {
+			sa.ToolCalls = sa.FilterToolCalls(filterOpts)
+		}
+		data, err := json.MarshalIndent(sa, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error formatting JSON: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(data))
+		return
+	}
+
+	if hasFilter {
+		fmt.Print(sa.FormatCLI(filterOpts))
+	} else {
+		fmt.Print(sa.FormatCLI())
 	}
 }
 
@@ -838,4 +933,3 @@ func runRollback(args []string) {
 		fmt.Printf("   Arquivos  : %d modificações restauradas na working tree\n", len(res.DirtyFiles))
 	}
 }
-

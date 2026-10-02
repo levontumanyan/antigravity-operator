@@ -17,7 +17,11 @@ func TestDashboardHTML_EscapesUntrustedInterpolations(t *testing.T) {
 	}
 
 	// Constantes internas (ícone/cor do doctor) e fragmentos já escapados montados no próprio script.
-	allowed := map[string]bool{"icon": true, "color": true, "pendingHtml": true, "urlHtml": true}
+	allowed := map[string]bool{
+		"icon": true, "color": true, "pendingHtml": true, "urlHtml": true,
+		"durHtml": true, "optionsHtml": true,
+		"promptCtxHtml": true, "cmdHtml": true, "fileHtml": true, "failHtml": true,
+	}
 
 	interp := regexp.MustCompile(`\$\{([^}]*)\}`)
 	for _, m := range interp.FindAllStringSubmatch(dashboardHTML, -1) {

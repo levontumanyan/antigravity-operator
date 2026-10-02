@@ -42,36 +42,51 @@ type TranscriptInfo struct {
 	Size           int64
 }
 
-// FindActiveTranscript localiza a sessão mais recente em ~/.gemini/antigravity/brain/*/transcript.jsonl.
+// FindActiveTranscript localiza a sessão mais recente em ~/.gemini/brain, ~/.gemini/antigravity-cli/brain ou ~/.gemini/antigravity/brain.
 func FindActiveTranscript(geminiDir string) (*TranscriptInfo, error) {
-	brainDir := filepath.Join(geminiDir, "brain")
-	entries, err := os.ReadDir(brainDir)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao ler pasta brain: %w", err)
+	candidates := []string{
+		filepath.Join(geminiDir, "brain"),
+		filepath.Join(geminiDir, "antigravity-cli", "brain"),
+		filepath.Join(geminiDir, "antigravity", "brain"),
+	}
+	if strings.HasSuffix(geminiDir, "brain") {
+		candidates = append([]string{geminiDir}, candidates...)
 	}
 
 	var latest *TranscriptInfo
+	var searchedDirs []string
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, brainDir := range candidates {
+		entries, err := os.ReadDir(brainDir)
+		if err != nil {
 			continue
 		}
-		candidate := filepath.Join(brainDir, entry.Name(), ".system_generated", "logs", "transcript.jsonl")
-		info, err := os.Stat(candidate)
-		if err == nil {
-			if latest == nil || info.ModTime().After(latest.ModTime) {
-				latest = &TranscriptInfo{
-					Path:           candidate,
-					ConversationID: entry.Name(),
-					ModTime:        info.ModTime(),
-					Size:           info.Size(),
+		searchedDirs = append(searchedDirs, brainDir)
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			candidate := filepath.Join(brainDir, entry.Name(), ".system_generated", "logs", "transcript.jsonl")
+			info, err := os.Stat(candidate)
+			if err == nil {
+				if latest == nil || info.ModTime().After(latest.ModTime) {
+					latest = &TranscriptInfo{
+						Path:           candidate,
+						ConversationID: entry.Name(),
+						ModTime:        info.ModTime(),
+						Size:           info.Size(),
+					}
 				}
 			}
 		}
 	}
 
 	if latest == nil {
-		return nil, fmt.Errorf("nenhum transcript ativo encontrado em %s", brainDir)
+		if len(searchedDirs) == 0 {
+			return nil, fmt.Errorf("falha ao ler pasta brain em %v", candidates)
+		}
+		return nil, fmt.Errorf("nenhum transcript ativo encontrado em %v", searchedDirs)
 	}
 
 	return latest, nil
