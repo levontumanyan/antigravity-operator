@@ -330,6 +330,7 @@
             transition: width 0.3s ease;
         }
         .ratio-auto { background: #e4e4e7; }
+        .ratio-approved { background: #22c55e; }
         .ratio-prompt { background: #71717a; }
         .ratio-fail { background: #ef4444; }
 
@@ -435,6 +436,11 @@
             background: rgba(255, 255, 255, 0.1);
             color: #ffffff;
             border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+        .mode-approved {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(34, 197, 94, 0.35);
         }
         .mode-prompt {
             background: rgba(255, 255, 255, 0.05);
@@ -855,10 +861,12 @@
 
             const total = a.total_tool_calls || 0;
             const autoCount = a.autonomous_tool_calls || 0;
+            const approvedCount = a.approved_tool_calls || 0;
             const promptCount = a.prompted_tool_calls || 0;
             const failCount = a.failed_tool_calls || 0;
 
             const autoPct = total > 0 ? Math.round((autoCount * 100) / total) : 0;
+            const approvedPct = total > 0 ? Math.round((approvedCount * 100) / total) : 0;
             const promptPct = total > 0 ? Math.round((promptCount * 100) / total) : 0;
             const failPct = total > 0 ? Math.round((failCount * 100) / total) : 0;
 
@@ -871,6 +879,10 @@
                     <div class="metric-badge">
                         <span class="metric-val" style="color: var(--text-main);">${Number(autoCount)} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">(${Number(autoPct)}%)</span></span>
                         <span class="metric-lbl">⚡ Autonomous Loops</span>
+                    </div>
+                    <div class="metric-badge">
+                        <span class="metric-val" style="color: var(--accent-green);">${Number(approvedCount)} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">(${Number(approvedPct)}%)</span></span>
+                        <span class="metric-lbl">✋ User Approved</span>
                     </div>
                     <div class="metric-badge">
                         <span class="metric-val" style="color: var(--text-muted);">${Number(promptCount)} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">(${Number(promptPct)}%)</span></span>
@@ -892,6 +904,7 @@
 
                 <div class="analytics-ratio-bar">
                     <div class="ratio-segment ratio-auto" style="width: ${Number(autoPct)}%" title="Autonomous Loops: ${Number(autoPct)}%"></div>
+                    <div class="ratio-segment ratio-approved" style="width: ${Number(approvedPct)}%" title="User Approved: ${Number(approvedPct)}%"></div>
                     <div class="ratio-segment ratio-prompt" style="width: ${Number(promptPct)}%" title="User Prompted: ${Number(promptPct)}%"></div>
                     <div class="ratio-segment ratio-fail" style="width: ${Number(failPct)}%" title="Failed Calls: ${Number(failPct)}%"></div>
                 </div>
@@ -970,6 +983,7 @@
                     <div class="filter-btn-group">
                         <button class="filter-btn ${escapeHtml(activeFilter === 'all' ? 'active' : '')}" data-filter="all" onclick="setFilter('all')">All Calls (${Number(toolCalls.length)})</button>
                         <button class="filter-btn ${escapeHtml(activeFilter === 'autonomous' ? 'active' : '')}" data-filter="autonomous" onclick="setFilter('autonomous')">⚡ Autonomous (${Number(a.autonomous_tool_calls || 0)})</button>
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'approved' ? 'active' : '')}" data-filter="approved" onclick="setFilter('approved')">✋ User Approved (${Number(a.approved_tool_calls || 0)})</button>
                         <button class="filter-btn ${escapeHtml(activeFilter === 'prompted' ? 'active' : '')}" data-filter="prompted" onclick="setFilter('prompted')">👤 User Prompted (${Number(a.prompted_tool_calls || 0)})</button>
                         <button class="filter-btn ${escapeHtml(activeFilter === 'failed' ? 'active' : '')}" data-filter="failed" onclick="setFilter('failed')">❌ Failed (${Number(a.failed_tool_calls || 0)})</button>
                     </div>
@@ -995,6 +1009,7 @@
             const toolCalls = a.tool_calls || [];
             const filtered = toolCalls.filter(c => {
                 if (activeFilter === 'autonomous' && !c.is_autonomous) return false;
+                if (activeFilter === 'approved' && !c.is_user_approved) return false;
                 if (activeFilter === 'prompted' && !c.is_prompt_triggered) return false;
                 if (activeFilter === 'failed' && !c.is_failed) return false;
                 if (activeToolSelect !== 'all' && c.tool !== activeToolSelect) return false;
@@ -1020,6 +1035,21 @@
                 if (c.duration_seconds > 0) {
                     durHtml = '<span style="font-size: 0.72rem; color: var(--text-muted);">' + escapeHtml(c.duration_seconds.toFixed(1)) + 's</span>';
                 }
+                let modeClass = 'mode-auto';
+                let modeLabel = '⚡ Autonomous';
+                if (c.is_user_approved) {
+                    modeClass = 'mode-approved';
+                    modeLabel = '✋ User Approved';
+                } else if (c.is_prompt_triggered) {
+                    modeClass = 'mode-prompt';
+                    modeLabel = '👤 Prompt-Triggered';
+                }
+                let approvalHtml = '';
+                if (c.is_user_approved) {
+                    approvalHtml = '<div class="detail-row"><span class="detail-label" style="color: var(--accent-green)">Terminal Confirmation:</span><div style="color: var(--accent-green); font-size: 0.82rem; margin-top: 3px;">✅ Manually approved by user in terminal</div></div>';
+                } else if (c.requires_approval && !c.is_user_approved) {
+                    approvalHtml = '<div class="detail-row"><span class="detail-label" style="color: var(--accent-red)">Terminal Confirmation:</span><div style="color: var(--accent-red); font-size: 0.82rem; margin-top: 3px;">❌ Rejected by user in terminal</div></div>';
+                }
                 let promptCtxHtml = '';
                 if (c.user_prompt_context) {
                     promptCtxHtml = '<div class="detail-row"><span class="detail-label">Context User Request:</span><div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 3px;">💬 "' + escapeHtml(c.user_prompt_context) + '"</div></div>';
@@ -1043,7 +1073,7 @@
                             <div class="tool-item-left">
                                 <span style="color: var(--text-muted); font-size: 0.75rem; font-family: monospace;">#${Number(c.step_index)}</span>
                                 <span class="tool-pill" style="margin: 0; padding: 2px 8px;"><strong>${escapeHtml(c.tool)}</strong></span>
-                                <span class="badge-mode ${escapeHtml(c.is_prompt_triggered ? 'mode-prompt' : 'mode-auto')}">${escapeHtml(c.is_prompt_triggered ? '👤 Prompt-Triggered' : '⚡ Autonomous')}</span>
+                                <span class="badge-mode ${escapeHtml(modeClass)}">${escapeHtml(modeLabel)}</span>
                                 <span class="badge-status ${escapeHtml(c.is_failed ? 'status-err' : 'status-ok')}">${escapeHtml(c.is_failed ? '❌ Failed' : '✅ Success')}</span>
                                 ${durHtml}
                             </div>
@@ -1054,6 +1084,7 @@
                         </div>
                         <div class="tool-item-summary">${escapeHtml(c.summary || c.command || c.tool)}</div>
                         <div class="tool-item-details">
+                            ${approvalHtml}
                             ${promptCtxHtml}
                             ${cmdHtml}
                             ${fileHtml}

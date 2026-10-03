@@ -3,6 +3,7 @@ package analytics
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -232,5 +233,112 @@ func TestExtractCleanPrompt_UTF8(t *testing.T) {
 		if r == '\ufffd' {
 			t.Errorf("found invalid UTF-8 replacement char in result: %q", result)
 		}
+	}
+}
+
+func TestLoadToolConfirmations(t *testing.T) {
+	tempLogDir := t.TempDir()
+	logFile := filepath.Join(tempLogDir, "cli-test.log")
+	logContent := `I1002 18:50:52.162814 230 input_loop.go:748] Responding to tool confirmation: convID=test-conv-123, stepIdx=979, approved=true, sandboxOverride=false, persistGrants=[]
+I1002 18:55:00.000000 230 input_loop.go:748] Responding to tool confirmation: convID=test-conv-123, stepIdx=985, approved=false, sandboxOverride=false, persistGrants=[]
+I1002 19:00:00.000000 999 server.go:2479] Tool confirmation for conversation test-conv-123 step 1049 (type=*gemini_coder_go_proto.Step_Generic approved=true)
+I1002 19:05:00.000000 230 input_loop.go:748] Responding to tool confirmation: convID=other-conv, stepIdx=555, approved=true, sandboxOverride=false, persistGrants=[]
+`
+	if err := os.WriteFile(logFile, []byte(logContent), 0644); err != nil {
+		t.Fatalf("failed to write test log file: %v", err)
+	}
+
+	confirmations := LoadToolConfirmations("test-conv-123", tempLogDir)
+	if len(confirmations) != 3 {
+		t.Fatalf("expected 3 confirmations, got %d", len(confirmations))
+	}
+	if !confirmations[979] {
+		t.Errorf("expected step 979 to be approved=true")
+	}
+	if confirmations[985] {
+		t.Errorf("expected step 985 to be approved=false")
+	}
+	if !confirmations[1049] {
+		t.Errorf("expected step 1049 to be approved=true")
+	}
+	if _, ok := confirmations[555]; ok {
+		t.Errorf("step 555 belongs to other-conv, should not be included")
+	}
+}
+
+func TestApplyConfirmations_DistinguishesAutonomousFromApproved(t *testing.T) {
+	sa := &SessionAnalytics{
+		ConversationID:      "test-conv-456",
+		TotalSteps:          10,
+		TotalToolCalls:      2,
+		AutonomousToolCalls: 2,
+		ToolCalls: []ToolCallRecord{
+			{
+				ID:           1,
+				StepIndex:    10,
+				Tool:         "run_command",
+				Command:      "git status",
+				IsAutonomous: true,
+			},
+			{
+				ID:           2,
+				StepIndex:    20,
+				Tool:         "run_command",
+				Command:      "rm -rf /tmp/foo",
+				IsAutonomous: true,
+			},
+		},
+	}
+
+	// User approved step 20 (and its execution at step 21)
+	confirmations := map[int]bool{
+		21: true,
+	}
+
+	sa.ApplyConfirmations(confirmations)
+
+	// Step 1 should remain autonomous
+	if !sa.ToolCalls[0].IsAutonomous {
+		t.Errorf("expected call 1 to remain autonomous")
+	}
+	if sa.ToolCalls[0].RequiresApproval || sa.ToolCalls[0].IsUserApproved {
+		t.Errorf("expected call 1 not to require approval")
+	}
+
+	// Step 2 was approved by the user, so it MUST NOT be autonomous!
+	if sa.ToolCalls[1].IsAutonomous {
+		t.Errorf("expected call 2 to NOT be autonomous after user approval")
+	}
+	if !sa.ToolCalls[1].RequiresApproval {
+		t.Errorf("expected call 2 to have RequiresApproval=true")
+	}
+	if !sa.ToolCalls[1].IsUserApproved {
+		t.Errorf("expected call 2 to have IsUserApproved=true")
+	}
+	if sa.ToolCalls[1].UserConfirmation != "approved" {
+		t.Errorf("expected call 2 to have UserConfirmation='approved', got %q", sa.ToolCalls[1].UserConfirmation)
+	}
+
+	if sa.AutonomousToolCalls != 1 {
+		t.Errorf("expected 1 autonomous tool call, got %d", sa.AutonomousToolCalls)
+	}
+	if sa.ApprovedToolCalls != 1 {
+		t.Errorf("expected 1 approved tool call, got %d", sa.ApprovedToolCalls)
+	}
+
+	// Filter test
+	approvedCalls := sa.FilterToolCalls(FilterOptions{ApprovedOnly: true})
+	if len(approvedCalls) != 1 || approvedCalls[0].ID != 2 {
+		t.Errorf("expected 1 approved call with ID=2, got %v", approvedCalls)
+	}
+
+	autoCalls := sa.FilterToolCalls(FilterOptions{AutonomousOnly: true})
+	if len(autoCalls) != 1 || autoCalls[0].ID != 1 {
+		t.Errorf("expected 1 auto call with ID=1, got %v", autoCalls)
+	}
+
+	cliOutput := sa.FormatCLI()
+	if !strings.Contains(cliOutput, "✋ User Approved: 1") {
+		t.Errorf("expected CLI to show User Approved count: %s", cliOutput)
 	}
 }

@@ -2,11 +2,13 @@ package analytics
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,8 +37,11 @@ type ToolCallRecord struct {
 	Command           string  `json:"command,omitempty"`
 	TargetFile        string  `json:"target_file,omitempty"`
 	Summary           string  `json:"summary"`
-	IsAutonomous      bool    `json:"is_autonomous"`       // Executed autonomously in an agent loop
+	IsAutonomous      bool    `json:"is_autonomous"`       // Executed autonomously in an agent loop (no user prompt or confirmation)
 	IsPromptTriggered bool    `json:"is_prompt_triggered"` // Executed immediately after a user prompt
+	RequiresApproval  bool    `json:"requires_approval"`   // Prompted to the user for interactive terminal confirmation
+	IsUserApproved    bool    `json:"is_user_approved"`    // Explicitly approved by user in terminal prompt
+	UserConfirmation  string  `json:"user_confirmation,omitempty"` // "approved" or "rejected"
 	IsFailed          bool    `json:"is_failed"`           // Exited with error or non-zero status
 	FailureReason     string  `json:"failure_reason,omitempty"`
 	DurationSeconds   float64 `json:"duration_seconds,omitempty"`
@@ -55,6 +60,7 @@ type SessionAnalytics struct {
 	SystemMessages      int               `json:"system_messages"`
 	TotalToolCalls      int               `json:"total_tool_calls"`
 	AutonomousToolCalls int               `json:"autonomous_tool_calls"`
+	ApprovedToolCalls   int               `json:"approved_tool_calls"`
 	PromptedToolCalls   int               `json:"prompted_tool_calls"`
 	FailedToolCalls     int               `json:"failed_tool_calls"`
 	ToolCounts          map[string]int    `json:"tool_counts"`
@@ -76,7 +82,11 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 	}
 	defer file.Close()
 
+	convID := extractConversationID(transcriptPath)
+	confirmations := LoadToolConfirmations(convID)
+
 	sa := &SessionAnalytics{
+		ConversationID: convID,
 		TranscriptPath: transcriptPath,
 		ToolCounts:     make(map[string]int),
 		FilesRead:      make(map[string]int),
@@ -320,6 +330,36 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 				idx := pendingToolIndices[0]
 				pendingToolIndices = pendingToolIndices[1:]
 
+				// Check if this execution required manual user confirmation in the terminal
+				stepIdx := evt.StepIndex
+				toolStep := sa.ToolCalls[idx].StepIndex
+				approved, isConfirmed := confirmations[stepIdx]
+				if !isConfirmed {
+					approved, isConfirmed = confirmations[toolStep]
+				}
+
+				if isConfirmed {
+					sa.ToolCalls[idx].RequiresApproval = true
+					sa.ToolCalls[idx].IsUserApproved = approved
+					if approved {
+						sa.ToolCalls[idx].UserConfirmation = "approved"
+					} else {
+						sa.ToolCalls[idx].UserConfirmation = "rejected"
+					}
+					// A command that required manual confirmation is NOT autonomous
+					if sa.ToolCalls[idx].IsAutonomous {
+						sa.ToolCalls[idx].IsAutonomous = false
+						if sa.AutonomousToolCalls > 0 {
+							sa.AutonomousToolCalls--
+						}
+					} else if sa.ToolCalls[idx].IsPromptTriggered {
+						if sa.PromptedToolCalls > 0 {
+							sa.PromptedToolCalls--
+						}
+					}
+					sa.ApprovedToolCalls++
+				}
+
 				content := evt.Content
 				isFailed := false
 				var failureMsg string
@@ -499,6 +539,7 @@ func hasRepetitionTarget(alerts []RepetitionAlert, target string) bool {
 // FilterOptions allows filtering tool calls for CLI and reporting.
 type FilterOptions struct {
 	AutonomousOnly bool
+	ApprovedOnly   bool
 	PromptedOnly   bool
 	FailedOnly     bool
 	ToolFilter     string
@@ -509,6 +550,9 @@ func (sa *SessionAnalytics) FilterToolCalls(opts FilterOptions) []ToolCallRecord
 	var filtered []ToolCallRecord
 	for _, c := range sa.ToolCalls {
 		if opts.AutonomousOnly && !c.IsAutonomous {
+			continue
+		}
+		if opts.ApprovedOnly && !c.IsUserApproved {
 			continue
 		}
 		if opts.PromptedOnly && !c.IsPromptTriggered {
@@ -538,13 +582,15 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 		sa.TotalSteps, sa.ModelTurns, sa.UserTurns, sa.SystemMessages))
 
 	autoPct := 0
+	approvedPct := 0
 	promptPct := 0
 	if sa.TotalToolCalls > 0 {
 		autoPct = (sa.AutonomousToolCalls * 100) / sa.TotalToolCalls
+		approvedPct = (sa.ApprovedToolCalls * 100) / sa.TotalToolCalls
 		promptPct = (sa.PromptedToolCalls * 100) / sa.TotalToolCalls
 	}
-	sb.WriteString(fmt.Sprintf("🛠️  Total Tool Calls: %d [⚡ Autonomous: %d (%d%%) | 👤 User Prompted: %d (%d%%)]\n",
-		sa.TotalToolCalls, sa.AutonomousToolCalls, autoPct, sa.PromptedToolCalls, promptPct))
+	sb.WriteString(fmt.Sprintf("🛠️  Total Tool Calls: %d [⚡ Autonomous: %d (%d%%) | ✋ User Approved: %d (%d%%) | 👤 User Prompted: %d (%d%%)]\n",
+		sa.TotalToolCalls, sa.AutonomousToolCalls, autoPct, sa.ApprovedToolCalls, approvedPct, sa.PromptedToolCalls, promptPct))
 
 	if sa.FailedToolCalls > 0 {
 		failPct := (sa.FailedToolCalls * 100) / sa.TotalToolCalls
@@ -612,6 +658,8 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 		filterLabel := "Filtered Tool Calls"
 		if opt.AutonomousOnly {
 			filterLabel = "⚡ Autonomous Loop Tool Calls"
+		} else if opt.ApprovedOnly {
+			filterLabel = "✋ User Approved Tool Calls"
 		} else if opt.PromptedOnly {
 			filterLabel = "👤 Prompt-Triggered Tool Calls"
 		} else if opt.FailedOnly {
@@ -628,7 +676,9 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 				statusIcon = "❌"
 			}
 			modeTag := "[auto]"
-			if c.IsPromptTriggered {
+			if c.IsUserApproved {
+				modeTag = "[apprv]"
+			} else if c.IsPromptTriggered {
 				modeTag = "[user]"
 			}
 			sb.WriteString(fmt.Sprintf("   %s %-6s Step #%-3d %-16s %s\n", statusIcon, modeTag, c.StepIndex, c.Tool, c.Summary))
@@ -639,4 +689,207 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 	}
 
 	return sb.String()
+}
+
+// extractConversationID attempts to retrieve the conversation UUID from a transcript path.
+func extractConversationID(transcriptPath string) string {
+	parts := strings.Split(transcriptPath, "/brain/")
+	if len(parts) > 1 {
+		subParts := strings.Split(parts[1], "/")
+		if len(subParts) > 0 && subParts[0] != "" {
+			return subParts[0]
+		}
+	}
+	return ""
+}
+
+// LoadToolConfirmations searches Antigravity CLI log files for interactive tool confirmations
+// belonging to the given conversation ID. Returns a map of stepIdx -> approved.
+func LoadToolConfirmations(convID string, customLogDir ...string) map[int]bool {
+	confirmations := make(map[int]bool)
+	if convID == "" {
+		return confirmations
+	}
+
+	var searchDirs []string
+	if len(customLogDir) > 0 && customLogDir[0] != "" {
+		searchDirs = append(searchDirs, customLogDir[0])
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		searchDirs = append(searchDirs,
+			filepath.Join(home, ".gemini", "antigravity-cli", "log"),
+			filepath.Join(home, ".gemini", "antigravity", "log"),
+		)
+	}
+
+	targetConvPattern := "convID=" + convID
+	serverConvPattern := "Tool confirmation for conversation " + convID
+
+	for _, dir := range searchDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+
+		type fileInfo struct {
+			path    string
+			modTime time.Time
+		}
+		var files []fileInfo
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			files = append(files, fileInfo{
+				path:    filepath.Join(dir, entry.Name()),
+				modTime: info.ModTime(),
+			})
+		}
+
+		// Check newest logs first
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].modTime.After(files[j].modTime)
+		})
+
+		convIDBytes := []byte(convID)
+		for _, f := range files {
+			data, err := os.ReadFile(f.path)
+			if err != nil {
+				continue
+			}
+			// Fast pre-filter: skip files that don't reference this conversation ID
+			if !bytes.Contains(data, convIDBytes) {
+				continue
+			}
+
+			scanner := bufio.NewScanner(bytes.NewReader(data))
+			buf := make([]byte, 64*1024)
+			scanner.Buffer(buf, 2*1024*1024)
+
+			for scanner.Scan() {
+				line := scanner.Text()
+
+				// Format 1: input_loop.go: Responding to tool confirmation: convID=..., stepIdx=..., approved=true...
+				if strings.Contains(line, "Responding to tool confirmation:") && strings.Contains(line, targetConvPattern) {
+					stepIdx, approved, ok := parseInputLoopConfirmation(line)
+					if ok {
+						confirmations[stepIdx] = approved
+					}
+					continue
+				}
+
+				// Format 2: server.go: Tool confirmation for conversation <convID> step <stepIdx> (... approved=true)
+				if strings.Contains(line, serverConvPattern) {
+					stepIdx, approved, ok := parseServerConfirmation(line)
+					if ok {
+						confirmations[stepIdx] = approved
+					}
+					continue
+				}
+			}
+		}
+	}
+
+	return confirmations
+}
+
+func parseInputLoopConfirmation(line string) (int, bool, bool) {
+	idxStep := strings.Index(line, "stepIdx=")
+	if idxStep == -1 {
+		return 0, false, false
+	}
+	sub := line[idxStep+len("stepIdx="):]
+	endIdx := strings.IndexAny(sub, ", \t\r\n")
+	if endIdx != -1 {
+		sub = sub[:endIdx]
+	}
+	stepIdx, err := strconv.Atoi(strings.TrimSpace(sub))
+	if err != nil {
+		return 0, false, false
+	}
+
+	idxApp := strings.Index(line, "approved=")
+	if idxApp == -1 {
+		return 0, false, false
+	}
+	subApp := line[idxApp+len("approved="):]
+	endApp := strings.IndexAny(subApp, ", \t\r\n")
+	if endApp != -1 {
+		subApp = subApp[:endApp]
+	}
+	approved := strings.EqualFold(strings.TrimSpace(subApp), "true")
+
+	return stepIdx, approved, true
+}
+
+func parseServerConfirmation(line string) (int, bool, bool) {
+	idxStep := strings.Index(line, " step ")
+	if idxStep == -1 {
+		return 0, false, false
+	}
+	sub := line[idxStep+len(" step "):]
+	endIdx := strings.IndexAny(sub, " (,\t\r\n")
+	if endIdx != -1 {
+		sub = sub[:endIdx]
+	}
+	stepIdx, err := strconv.Atoi(strings.TrimSpace(sub))
+	if err != nil {
+		return 0, false, false
+	}
+
+	idxApp := strings.Index(line, "approved=")
+	if idxApp == -1 {
+		return 0, false, false
+	}
+	subApp := line[idxApp+len("approved="):]
+	endApp := strings.IndexAny(subApp, ") \t\r\n")
+	if endApp != -1 {
+		subApp = subApp[:endApp]
+	}
+	approved := strings.EqualFold(strings.TrimSpace(subApp), "true")
+
+	return stepIdx, approved, true
+}
+
+// ApplyConfirmations retroactively updates tool call records with confirmation results.
+func (sa *SessionAnalytics) ApplyConfirmations(confirmations map[int]bool) {
+	if len(confirmations) == 0 {
+		return
+	}
+	for i := range sa.ToolCalls {
+		rec := &sa.ToolCalls[i]
+		if rec.RequiresApproval {
+			continue // already processed
+		}
+		approved, isConfirmed := confirmations[rec.StepIndex]
+		if !isConfirmed {
+			approved, isConfirmed = confirmations[rec.StepIndex+1]
+		}
+		if isConfirmed {
+			rec.RequiresApproval = true
+			rec.IsUserApproved = approved
+			if approved {
+				rec.UserConfirmation = "approved"
+			} else {
+				rec.UserConfirmation = "rejected"
+			}
+			if rec.IsAutonomous {
+				rec.IsAutonomous = false
+				if sa.AutonomousToolCalls > 0 {
+					sa.AutonomousToolCalls--
+				}
+			} else if rec.IsPromptTriggered {
+				if sa.PromptedToolCalls > 0 {
+					sa.PromptedToolCalls--
+				}
+			}
+			sa.ApprovedToolCalls++
+		}
+	}
 }

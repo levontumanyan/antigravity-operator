@@ -263,6 +263,7 @@ func (s *Server) getAnalyticsData() *analytics.SessionAnalytics {
 		return nil
 	}
 	sa.ConversationID = tInfo.ConversationID
+	sa.ApplyConfirmations(analytics.LoadToolConfirmations(tInfo.ConversationID))
 
 	// Cap tool calls for dashboard payload to latest 100 while keeping full session aggregate metrics
 	if len(sa.ToolCalls) > 100 {

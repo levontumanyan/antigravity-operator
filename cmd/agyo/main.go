@@ -303,6 +303,7 @@ func runSessionAnalytics(args []string) {
 	analyticsCmd := flag.NewFlagSet("session analytics", flag.ExitOnError)
 	jsonOut := analyticsCmd.Bool("json", false, "Output analytics as JSON")
 	autonomous := analyticsCmd.Bool("autonomous", false, "Filter to show only autonomous loop tool calls")
+	approved := analyticsCmd.Bool("approved", false, "Filter to show only tool calls manually approved by user in terminal")
 	prompted := analyticsCmd.Bool("prompted", false, "Filter to show only prompt-triggered tool calls")
 	failed := analyticsCmd.Bool("failed", false, "Filter to show only failed tool calls")
 	toolName := analyticsCmd.String("tool", "", "Filter to show only calls for a specific tool (e.g. run_command)")
@@ -358,15 +359,17 @@ func runSessionAnalytics(args []string) {
 		os.Exit(1)
 	}
 	sa.ConversationID = conversationID
+	sa.ApplyConfirmations(analytics.LoadToolConfirmations(conversationID))
 
 	filterOpts := analytics.FilterOptions{
 		AutonomousOnly: *autonomous,
+		ApprovedOnly:   *approved,
 		PromptedOnly:   *prompted,
 		FailedOnly:     *failed,
 		ToolFilter:     *toolName,
 	}
 
-	hasFilter := *autonomous || *prompted || *failed || *toolName != ""
+	hasFilter := *autonomous || *approved || *prompted || *failed || *toolName != ""
 
 	if *jsonOut {
 		if hasFilter {

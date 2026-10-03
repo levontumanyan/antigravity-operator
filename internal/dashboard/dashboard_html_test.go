@@ -21,6 +21,7 @@ func TestDashboardHTML_EscapesUntrustedInterpolations(t *testing.T) {
 		"icon": true, "color": true, "pendingHtml": true, "urlHtml": true,
 		"durHtml": true, "optionsHtml": true,
 		"promptCtxHtml": true, "cmdHtml": true, "fileHtml": true, "failHtml": true,
+		"approvalHtml": true,
 	}
 
 	interp := regexp.MustCompile(`\$\{([^}]*)\}`)
