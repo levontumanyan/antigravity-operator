@@ -183,6 +183,39 @@
             opacity: 1;
         }
 
+		/* Analytics Cockpit Sub-Bar */
+		.analytics-cockpit-bar {
+			background: var(--surface-color);
+			border: 1px solid var(--border-color);
+			border-radius: 8px;
+			padding: 8px 16px;
+			margin-bottom: 16px;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			flex-wrap: wrap;
+			gap: 12px;
+		}
+
+		.analytics-cockpit-left {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			flex-wrap: wrap;
+		}
+
+		.analytics-cockpit-right {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			font-size: 0.78rem;
+			color: var(--text-muted);
+		}
+
+		.analytics-cockpit-right strong {
+			color: var(--text-main);
+		}
+
         .pulse-badge {
             display: inline-flex;
             align-items: center;
@@ -578,13 +611,6 @@
 
         <div class="header-scope-row">
             <div class="scope-chip">📁 Workspace: <strong id="scope-workspace">Detecting...</strong></div>
-            <div class="session-picker-chip">
-                <span style="color: var(--text-muted); font-size: 0.75rem; font-weight: 500;">🎯 Session:</span>
-                <select id="session-select" class="session-dropdown" onchange="switchSession(this.value)" title="Select session">
-                    <option value="">Detecting active session...</option>
-                </select>
-                <span id="session-prompt-info" class="session-info-icon" title="Hover to view full initial prompt">💬</span>
-            </div>
         </div>
     </header>
 
@@ -623,6 +649,23 @@
 
     <!-- View 2: Dedicated Tool Analytics & Efficiency Dashboard -->
     <div id="analytics-view">
+		<div class="analytics-cockpit-bar">
+			<div class="analytics-cockpit-left">
+				<span style="color: var(--text-muted); font-size: 0.75rem; font-weight: 500;">🎯 Session:</span>
+				<select id="session-select" class="session-dropdown" onchange="switchSession(this.value)" title="Select session">
+					<option value="">Detecting active session...</option>
+				</select>
+				<span id="session-prompt-info" class="session-info-icon" title="Hover to view full initial prompt">💬</span>
+			</div>
+			<div class="analytics-cockpit-right">
+				<span>Status: <strong id="cockpit-session-status" style="color: var(--accent-green);">● active</strong></span>
+				<span>•</span>
+				<span>Last active: <strong id="cockpit-session-age">Just now</strong></span>
+				<span>•</span>
+				<span>Workspace: <strong id="cockpit-session-workspace">Detecting...</strong></span>
+			</div>
+		</div>
+
         <div class="card">
             <h2>🛠️ Tool Call Analytics & Efficiency Alerts</h2>
             <div id="analytics-content">
@@ -755,6 +798,22 @@
                     promptInfo.title = 'Full Initial Prompt:\n"' + fullPrompt + '"';
                     promptInfo.style.display = 'inline-block';
                 }
+                const statusEl = document.getElementById('cockpit-session-status');
+                if (statusEl) {
+                    if (active.is_active) {
+                        statusEl.innerHTML = '<span style="color: var(--accent-green);">● active</span>';
+                    } else {
+                        statusEl.innerHTML = '<span style="color: var(--text-muted);">○ idle</span>';
+                    }
+                }
+                const ageEl = document.getElementById('cockpit-session-age');
+                if (ageEl) {
+                    ageEl.innerText = active.relative_time || 'Unknown';
+                }
+                const wsEl = document.getElementById('cockpit-session-workspace');
+                if (wsEl) {
+                    wsEl.innerText = active.workspace_name || 'root';
+                }
             } else if (promptInfo) {
                 promptInfo.style.display = 'none';
             }
@@ -802,6 +861,12 @@
                 const activeWorkspace = (data.analytics && data.analytics.workspace) || data.host_dir || 'Detecting...';
                 const wsEl = document.getElementById('scope-workspace');
                 if (wsEl) wsEl.innerText = activeWorkspace;
+
+                const cockpitWsEl = document.getElementById('cockpit-session-workspace');
+                if (cockpitWsEl && data.analytics && data.analytics.workspace) {
+                    const wsBase = data.analytics.workspace.split('/').pop() || data.analytics.workspace;
+                    cockpitWsEl.innerText = wsBase;
+                }
 
                 const activeConvID = (data.analytics && data.analytics.conversation_id) || currentSessionID;
                 if (!currentSessionID && activeConvID) {
