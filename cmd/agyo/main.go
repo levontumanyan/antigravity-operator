@@ -307,6 +307,7 @@ func runSessionAnalytics(args []string) {
 	prompted := analyticsCmd.Bool("prompted", false, "Filter to show only prompt-triggered tool calls")
 	failed := analyticsCmd.Bool("failed", false, "Filter to show only failed tool calls")
 	toolName := analyticsCmd.String("tool", "", "Filter to show only calls for a specific tool (e.g. run_command)")
+	listSessions := analyticsCmd.Bool("list", false, "List recent sessions and their initial prompts")
 	_ = analyticsCmd.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -316,6 +317,43 @@ func runSessionAnalytics(args []string) {
 	}
 
 	geminiDir := filepath.Join(home, ".gemini")
+
+	if *listSessions {
+		sessions, err := watcher.ListRecentSessions(geminiDir, 40)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing sessions: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			data, _ := json.MarshalIndent(sessions, "", "  ")
+			fmt.Println(string(data))
+			return
+		}
+		fmt.Printf("📚 Discovered Antigravity Sessions (%d found):\n", len(sessions))
+		fmt.Println("-----------------------------------------------------------------------------------------------------------------")
+		fmt.Printf("%-10s %-10s %-12s %-25s %s\n", "SESSION ID", "STATUS", "AGE", "WORKSPACE", "FIRST PROMPT SNIPPET")
+		fmt.Println("-----------------------------------------------------------------------------------------------------------------")
+		for _, s := range sessions {
+			status := "○ idle"
+			if s.IsActive {
+				status = "● active"
+			}
+			wsDisp := s.WorkspaceName
+			if wsDisp == "" {
+				wsDisp = "(root)"
+			}
+			if len(wsDisp) > 23 {
+				wsDisp = wsDisp[:20] + "..."
+			}
+			promptDisp := s.FirstPromptSnippet
+			if len(promptDisp) > 55 {
+				promptDisp = promptDisp[:52] + "..."
+			}
+			fmt.Printf("%-10s %-10s %-12s %-25s 💬 %q\n", s.ShortID, status, s.RelativeTime, wsDisp, promptDisp)
+		}
+		fmt.Println("\n💡 To analyze a specific session: agyo session analytics <session-id>")
+		return
+	}
 
 	var transcriptPath string
 	var conversationID string

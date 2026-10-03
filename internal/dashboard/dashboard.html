@@ -131,6 +131,58 @@
             font-weight: 600;
         }
 
+        .session-picker-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            padding: 2px 8px;
+            border-radius: 6px;
+            max-width: 100%;
+        }
+
+        .session-dropdown {
+            background: #18181b;
+            border: 1px solid var(--border-color);
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 0.76rem;
+            font-weight: 500;
+            padding: 3px 8px;
+            border-radius: 4px;
+            outline: none;
+            max-width: 480px;
+            cursor: pointer;
+            text-overflow: ellipsis;
+        }
+
+        .session-dropdown:focus {
+            border-color: #a1a1aa;
+        }
+
+        .session-dropdown optgroup {
+            background: #18181b;
+            color: #a1a1aa;
+            font-weight: 600;
+        }
+
+        .session-dropdown option {
+            background: #18181b;
+            color: #ffffff;
+            padding: 4px 6px;
+        }
+
+        .session-info-icon {
+            opacity: 0.7;
+            transition: opacity 0.2s ease;
+            cursor: help;
+        }
+
+        .session-info-icon:hover {
+            opacity: 1;
+        }
+
         .pulse-badge {
             display: inline-flex;
             align-items: center;
@@ -526,7 +578,13 @@
 
         <div class="header-scope-row">
             <div class="scope-chip">📁 Workspace: <strong id="scope-workspace">Detecting...</strong></div>
-            <div class="scope-chip">Session: <strong id="scope-session-id">...</strong></div>
+            <div class="session-picker-chip">
+                <span style="color: var(--text-muted); font-size: 0.75rem; font-weight: 500;">🎯 Session:</span>
+                <select id="session-select" class="session-dropdown" onchange="switchSession(this.value)" title="Select session">
+                    <option value="">Detecting active session...</option>
+                </select>
+                <span id="session-prompt-info" class="session-info-icon" title="Hover to view full initial prompt">💬</span>
+            </div>
             <div id="scope-mismatch-hint" class="scope-chip" style="display: none; color: var(--accent-yellow); border-color: rgba(210, 153, 34, 0.4);">
                 <span>ℹ️ Host Daemon: <strong id="scope-host-cwd" style="color: var(--accent-yellow);"></strong></span>
             </div>
@@ -625,6 +683,86 @@
             }
         }
 
+        let currentSessionID = '';
+        let lastSessionsJSON = '';
+
+        function getSessionFromUrl() {
+            const hashMatch = window.location.hash.match(/[?&]session=([a-zA-Z0-9_\-]+)/);
+            if (hashMatch) return hashMatch[1];
+            const searchParams = new URLSearchParams(window.location.search);
+            return searchParams.get('session') || '';
+        }
+
+        currentSessionID = getSessionFromUrl();
+
+        function switchSession(newID) {
+            if (!newID || newID === currentSessionID) return;
+            currentSessionID = newID;
+            const currentTab = window.location.hash.startsWith('#host') ? 'host' : 'analytics';
+            history.replaceState(null, '', '#' + currentTab + '?session=' + encodeURIComponent(newID));
+            fetchDashboardData();
+        }
+
+        function renderSessionsDropdown(sessions, currentID, currentWorkspace) {
+            const sel = document.getElementById('session-select');
+            if (!sel || !sessions || sessions.length === 0) return;
+
+            const sessionsJSON = JSON.stringify(sessions) + ':' + currentID;
+            if (sessionsJSON === lastSessionsJSON) return;
+            lastSessionsJSON = sessionsJSON;
+
+            const currentWsNorm = (currentWorkspace || '').toLowerCase().replace(/\\/g, '/');
+
+            const currentWsSessions = [];
+            const otherWsSessions = [];
+
+            for (let i = 0; i < sessions.length; i++) {
+                const s = sessions[i];
+                const sWs = (s.workspace || '').toLowerCase().replace(/\\/g, '/');
+                if (currentWsNorm && (sWs === currentWsNorm || sWs.endsWith('/' + currentWsNorm.split('/').pop()))) {
+                    currentWsSessions.push(s);
+                } else {
+                    otherWsSessions.push(s);
+                }
+            }
+
+            let html = '';
+            const buildGroup = (label, list) => {
+                if (list.length === 0) return '';
+                let grp = '<optgroup label="' + escapeHtml(label) + '">';
+                for (let i = 0; i < list.length; i++) {
+                    const s = list[i];
+                    const isSel = (s.id === currentID) ? 'selected' : '';
+                    const statusDot = s.is_active ? '● ' : '○ ';
+                    const labelText = statusDot + '💬 "' + s.first_prompt_snippet + '" (' + s.short_id + ') — ' + s.relative_time;
+                    grp += '<option value="' + escapeHtml(s.id) + '" title="' + escapeHtml(s.first_prompt || s.first_prompt_snippet) + '" ' + isSel + '>' + escapeHtml(labelText) + '</option>';
+                }
+                grp += '</optgroup>';
+                return grp;
+            };
+
+            const wsLabel = (currentWsSessions.length > 0 && currentWsSessions[0].workspace_name) ? currentWsSessions[0].workspace_name : 'This Workspace';
+            html += buildGroup('This Workspace (' + wsLabel + ')', currentWsSessions);
+            if (otherWsSessions.length > 0) {
+                html += buildGroup('Other Workspaces', otherWsSessions);
+            }
+
+            sel.innerHTML = html;
+
+            const active = sessions.find(s => s.id === currentID);
+            const promptInfo = document.getElementById('session-prompt-info');
+            if (active) {
+                const fullPrompt = active.first_prompt || active.first_prompt_snippet;
+                sel.title = 'Full Initial Prompt:\n"' + fullPrompt + '"';
+                if (promptInfo) {
+                    promptInfo.title = 'Full Initial Prompt:\n"' + fullPrompt + '"';
+                    promptInfo.style.display = 'inline-block';
+                }
+            } else if (promptInfo) {
+                promptInfo.style.display = 'none';
+            }
+        }
+
         function switchMainTab(view) {
             const hostBtn = document.getElementById('tab-host');
             const analyticsBtn = document.getElementById('tab-analytics');
@@ -633,25 +771,31 @@
 
             if (!hostBtn || !analyticsBtn || !hostView || !analyticsView) return;
 
+            const sessParam = currentSessionID ? '?session=' + encodeURIComponent(currentSessionID) : '';
+
             if (view === 'host') {
                 hostBtn.classList.add('active');
                 analyticsBtn.classList.remove('active');
                 hostView.style.display = 'grid';
                 analyticsView.style.display = 'none';
-                history.replaceState(null, '', '#host');
+                history.replaceState(null, '', '#host' + sessParam);
             } else {
                 analyticsBtn.classList.add('active');
                 hostBtn.classList.remove('active');
                 analyticsView.style.display = 'block';
                 hostView.style.display = 'none';
-                history.replaceState(null, '', '#analytics');
+                history.replaceState(null, '', '#analytics' + sessParam);
             }
         }
 
         async function fetchDashboardData() {
             if (isPaused) return;
             try {
-                const res = await fetch('/api/all');
+                let fetchUrl = '/api/all';
+                if (currentSessionID) {
+                    fetchUrl += '?session=' + encodeURIComponent(currentSessionID);
+                }
+                const res = await fetch(fetchUrl);
                 if (!res.ok) throw new Error('Falha na resposta: ' + res.status);
                 const data = await res.json();
                 renderDashboard(data);
@@ -662,9 +806,13 @@
                 const wsEl = document.getElementById('scope-workspace');
                 if (wsEl) wsEl.innerText = activeWorkspace;
 
-                if (data.analytics && data.analytics.conversation_id) {
-                    const sessEl = document.getElementById('scope-session-id');
-                    if (sessEl) sessEl.innerText = data.analytics.conversation_id.slice(0, 8);
+                const activeConvID = (data.analytics && data.analytics.conversation_id) || currentSessionID;
+                if (!currentSessionID && activeConvID) {
+                    currentSessionID = activeConvID;
+                }
+
+                if (data.sessions && data.sessions.length > 0) {
+                    renderSessionsDropdown(data.sessions, activeConvID, activeWorkspace);
                 }
 
                 // Subtle mismatch hint if daemon was launched from another repo

@@ -45,6 +45,64 @@ func TestFindActiveTranscript(t *testing.T) {
 	if latest.Path != file2 {
 		t.Errorf("expected path %s, got %s", file2, latest.Path)
 	}
+
+	// 3. Find specific session
+	s1, err := FindSession(tempGemini, "conv-1")
+	if err != nil {
+		t.Fatalf("unexpected error finding conv-1: %v", err)
+	}
+	if s1.ConversationID != "conv-1" || s1.Path != file1 {
+		t.Errorf("expected conv-1 at %s, got %+v", file1, s1)
+	}
+
+	// 3b. Find specific session with short prefix
+	sPrefix, err := FindSession(tempGemini, "conv-")
+	if err != nil {
+		t.Fatalf("unexpected error finding prefix 'conv-': %v", err)
+	}
+	if !strings.HasPrefix(sPrefix.ConversationID, "conv-") {
+		t.Errorf("expected session matching prefix conv-, got %s", sPrefix.ConversationID)
+	}
+
+	// 4. FindSession fallback to latest if convID is empty
+	sDef, err := FindSession(tempGemini, "")
+	if err != nil {
+		t.Fatalf("unexpected error finding default session: %v", err)
+	}
+	if sDef.ConversationID != "conv-2" {
+		t.Errorf("expected conv-2 as default, got %s", sDef.ConversationID)
+	}
+
+	// 5. ListRecentSessions
+	_ = os.WriteFile(file1, []byte("{\"step_index\":0,\"type\":\"USER_INPUT\",\"content\":\"<USER_REQUEST>\\nRefactor the Quartz navigation system and check layout\\n</USER_REQUEST>\\nActive Workspaces:\\n- /Users/test/repos/knowledge-base\"}\n"), 0644)
+	summaries, err := ListRecentSessions(tempGemini, 10)
+	if err != nil {
+		t.Fatalf("unexpected error listing sessions: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(summaries))
+	}
+	foundConv1 := false
+	for _, s := range summaries {
+		if s.ID == "conv-1" {
+			foundConv1 = true
+			if !strings.Contains(s.FirstPrompt, "Refactor the Quartz navigation") {
+				t.Errorf("expected full prompt to contain 'Refactor the Quartz navigation', got %q", s.FirstPrompt)
+			}
+			if !strings.Contains(s.FirstPromptSnippet, "Refactor the Quartz navigation") {
+				t.Errorf("expected snippet to contain 'Refactor the Quartz navigation', got %q", s.FirstPromptSnippet)
+			}
+			if s.Workspace != "/Users/test/repos/knowledge-base" {
+				t.Errorf("expected workspace /Users/test/repos/knowledge-base, got %q", s.Workspace)
+			}
+			if s.WorkspaceName != "knowledge-base" {
+				t.Errorf("expected workspace_name knowledge-base, got %q", s.WorkspaceName)
+			}
+		}
+	}
+	if !foundConv1 {
+		t.Errorf("conv-1 not found in ListRecentSessions")
+	}
 }
 
 func TestParseLine(t *testing.T) {

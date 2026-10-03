@@ -56,6 +56,7 @@ type ConsolidatedData struct {
 	Tabs      []profile.Tab               `json:"tabs"`
 	Events    []string                    `json:"events"`
 	Analytics *analytics.SessionAnalytics `json:"analytics,omitempty"`
+	Sessions  []watcher.SessionSummary    `json:"sessions,omitempty"`
 }
 
 // NewServer inicializa o servidor de dashboard com suas rotas.
@@ -93,6 +94,7 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/tabs", s.handleTabs)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/analytics", s.handleAnalytics)
+	mux.HandleFunc("/api/sessions", s.handleSessions)
 
 	s.server = &http.Server{
 		Handler:      s.securityMiddleware(mux),
@@ -190,14 +192,17 @@ func (s *Server) handleAll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	requestedSession := r.URL.Query().Get("session")
+
 	data := ConsolidatedData{
 		Timestamp: time.Now(),
 		HostDir:   hostCwd,
 		Session:   s.getSessionData(),
 		Doctor:    s.getDoctorData(),
 		Tabs:      s.getTabsData(),
-		Events:    s.getEventsData(),
-		Analytics: s.getAnalyticsData(),
+		Events:    s.getEventsData(requestedSession),
+		Analytics: s.getAnalyticsData(requestedSession),
+		Sessions:  s.getSessionList(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -221,12 +226,12 @@ func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.getEventsData())
+	_ = json.NewEncoder(w).Encode(s.getEventsData(r.URL.Query().Get("session")))
 }
 
 func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	data := s.getAnalyticsData()
+	data := s.getAnalyticsData(r.URL.Query().Get("session"))
 	if data == nil {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"no active transcript found"}`))
@@ -235,13 +240,24 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(data)
 }
 
-func (s *Server) getAnalyticsData() *analytics.SessionAnalytics {
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.getSessionList())
+}
+
+func (s *Server) getAnalyticsData(convID ...string) *analytics.SessionAnalytics {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
 	geminiDir := filepath.Join(home, ".gemini")
-	tInfo, err := watcher.FindActiveTranscript(geminiDir)
+
+	targetConvID := ""
+	if len(convID) > 0 {
+		targetConvID = convID[0]
+	}
+
+	tInfo, err := watcher.FindSession(geminiDir, targetConvID)
 	if err != nil {
 		return nil
 	}
@@ -330,14 +346,20 @@ func (s *Server) getTabsData() []profile.Tab {
 	return tabs
 }
 
-func (s *Server) getEventsData() []string {
+func (s *Server) getEventsData(convID ...string) []string {
 	var events []string
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return events
 	}
 	geminiDir := filepath.Join(home, ".gemini")
-	tInfo, err := watcher.FindActiveTranscript(geminiDir)
+
+	targetConvID := ""
+	if len(convID) > 0 {
+		targetConvID = convID[0]
+	}
+
+	tInfo, err := watcher.FindSession(geminiDir, targetConvID)
 	if err != nil {
 		return events
 	}
@@ -359,4 +381,17 @@ func (s *Server) getEventsData() []string {
 	})
 
 	return events
+}
+
+func (s *Server) getSessionList() []watcher.SessionSummary {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return []watcher.SessionSummary{}
+	}
+	geminiDir := filepath.Join(home, ".gemini")
+	list, err := watcher.ListRecentSessions(geminiDir, 60)
+	if err != nil {
+		return []watcher.SessionSummary{}
+	}
+	return list
 }

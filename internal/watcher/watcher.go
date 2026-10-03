@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,20 @@ type TranscriptInfo struct {
 	ConversationID string
 	ModTime        time.Time
 	Size           int64
+}
+
+// SessionSummary contém metadados para exibição e filtragem de sessões no dashboard e CLI.
+type SessionSummary struct {
+	ID                 string    `json:"id"`
+	ShortID            string    `json:"short_id"`
+	Workspace          string    `json:"workspace"`
+	WorkspaceName      string    `json:"workspace_name"`
+	FirstPrompt        string    `json:"first_prompt"`         // Prompt inicial completo (para tooltip/hover)
+	FirstPromptSnippet string    `json:"first_prompt_snippet"` // Snippet conciso de uma linha para o dropdown
+	ModTime            time.Time `json:"mod_time"`
+	RelativeTime       string    `json:"relative_time"`
+	IsActive           bool      `json:"is_active"`
+	Path               string    `json:"path"`
 }
 
 // FindActiveTranscript localiza a sessão mais recente em ~/.gemini/brain, ~/.gemini/antigravity-cli/brain ou ~/.gemini/antigravity/brain.
@@ -90,6 +105,355 @@ func FindActiveTranscript(geminiDir string) (*TranscriptInfo, error) {
 	}
 
 	return latest, nil
+}
+
+// FindSession localiza o transcript de uma sessão específica pelo conversationID, ou a mais recente se vazio.
+func FindSession(geminiDir, convID string) (*TranscriptInfo, error) {
+	if convID == "" {
+		return FindActiveTranscript(geminiDir)
+	}
+
+	candidates := []string{
+		filepath.Join(geminiDir, "brain", convID, ".system_generated", "logs", "transcript.jsonl"),
+		filepath.Join(geminiDir, "antigravity-cli", "brain", convID, ".system_generated", "logs", "transcript.jsonl"),
+		filepath.Join(geminiDir, "antigravity", "brain", convID, ".system_generated", "logs", "transcript.jsonl"),
+	}
+	if strings.HasSuffix(geminiDir, "brain") {
+		candidates = append([]string{filepath.Join(geminiDir, convID, ".system_generated", "logs", "transcript.jsonl")}, candidates...)
+	}
+
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil {
+			return &TranscriptInfo{
+				Path:           path,
+				ConversationID: convID,
+				ModTime:        info.ModTime(),
+				Size:           info.Size(),
+			}, nil
+		}
+	}
+
+	// Fallback para prefix matching (ex: shortID de 8 caracteres)
+	if len(convID) >= 4 {
+		brainDirs := []string{
+			filepath.Join(geminiDir, "brain"),
+			filepath.Join(geminiDir, "antigravity-cli", "brain"),
+			filepath.Join(geminiDir, "antigravity", "brain"),
+		}
+		if strings.HasSuffix(geminiDir, "brain") {
+			brainDirs = append([]string{geminiDir}, brainDirs...)
+		}
+		for _, bDir := range brainDirs {
+			entries, err := os.ReadDir(bDir)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if entry.IsDir() && strings.HasPrefix(entry.Name(), convID) {
+					fullID := entry.Name()
+					path := filepath.Join(bDir, fullID, ".system_generated", "logs", "transcript.jsonl")
+					info, err := os.Stat(path)
+					if err == nil {
+						return &TranscriptInfo{
+							Path:           path,
+							ConversationID: fullID,
+							ModTime:        info.ModTime(),
+							Size:           info.Size(),
+						}, nil
+					}
+				}
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("sessão %q não encontrada", convID)
+}
+
+// ListRecentSessions varre as pastas de transcrição e retorna resumos das sessões mais recentes.
+func ListRecentSessions(geminiDir string, maxCount int) ([]SessionSummary, error) {
+	if maxCount <= 0 {
+		maxCount = 50
+	}
+
+	candidates := []string{
+		filepath.Join(geminiDir, "brain"),
+		filepath.Join(geminiDir, "antigravity-cli", "brain"),
+		filepath.Join(geminiDir, "antigravity", "brain"),
+	}
+	if strings.HasSuffix(geminiDir, "brain") {
+		candidates = append([]string{geminiDir}, candidates...)
+	}
+
+	type rawCandidate struct {
+		path    string
+		convID  string
+		modTime time.Time
+		size    int64
+	}
+	var rawList []rawCandidate
+	seen := make(map[string]bool)
+
+	for _, brainDir := range candidates {
+		entries, err := os.ReadDir(brainDir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			convID := entry.Name()
+			if seen[convID] {
+				continue
+			}
+
+			path := filepath.Join(brainDir, convID, ".system_generated", "logs", "transcript.jsonl")
+			info, err := os.Stat(path)
+			if err != nil || info.Size() == 0 {
+				continue
+			}
+
+			seen[convID] = true
+			rawList = append(rawList, rawCandidate{
+				path:    path,
+				convID:  convID,
+				modTime: info.ModTime(),
+				size:    info.Size(),
+			})
+		}
+	}
+
+	// Ordena por modTime decrescente (sessões mais recentes primeiro)
+	sort.Slice(rawList, func(i, j int) bool {
+		return rawList[i].modTime.After(rawList[j].modTime)
+	})
+
+	if len(rawList) > maxCount {
+		rawList = rawList[:maxCount]
+	}
+
+	var summaries []SessionSummary
+	for _, c := range rawList {
+		firstPrompt, snippet, ws := extractInitialPromptAndWorkspace(c.path)
+		shortID := c.convID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		if snippet == "" {
+			snippet = "Session " + shortID
+		}
+		wsName := ""
+		if ws != "" {
+			wsName = filepath.Base(ws)
+		}
+
+		isActive := time.Since(c.modTime) < 5*time.Minute
+
+		summaries = append(summaries, SessionSummary{
+			ID:                 c.convID,
+			ShortID:            shortID,
+			Workspace:          ws,
+			WorkspaceName:      wsName,
+			FirstPrompt:        firstPrompt,
+			FirstPromptSnippet: snippet,
+			ModTime:            c.modTime,
+			RelativeTime:       formatRelativeTime(c.modTime),
+			IsActive:           isActive,
+			Path:               c.path,
+		})
+	}
+
+	return summaries, nil
+}
+
+func extractInitialPromptAndWorkspace(transcriptPath string) (string, string, string) {
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return "", "", ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	var firstPrompt, snippet, workspace string
+
+	lineCount := 0
+	for scanner.Scan() {
+		lineCount++
+		if lineCount > 40 {
+			break
+		}
+		line := scanner.Text()
+
+		var evt struct {
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(line), &evt); err == nil && evt.Content != "" {
+			if firstPrompt == "" && (evt.Type == "USER_INPUT" || strings.Contains(evt.Content, "<USER_REQUEST>")) {
+				if strings.Contains(evt.Content, "<USER_REQUEST>") {
+					parts := strings.Split(evt.Content, "<USER_REQUEST>")
+					if len(parts) > 1 {
+						sub := strings.Split(parts[1], "</USER_REQUEST>")
+						firstPrompt = strings.TrimSpace(sub[0])
+					}
+				} else if evt.Type == "USER_INPUT" {
+					firstPrompt = strings.TrimSpace(evt.Content)
+				}
+				if firstPrompt != "" {
+					clean := strings.ReplaceAll(firstPrompt, "\n", " ")
+					clean = strings.TrimSpace(clean)
+					runes := []rune(clean)
+					if len(runes) > 55 {
+						snippet = string(runes[:52]) + "..."
+					} else {
+						snippet = string(runes)
+					}
+				}
+			}
+
+			if workspace == "" {
+				if strings.Contains(evt.Content, "Active Workspaces:") {
+					parts := strings.Split(evt.Content, "Active Workspaces:")
+					if len(parts) > 1 {
+						lines := strings.Split(parts[1], "\n")
+						for _, l := range lines {
+							l = strings.TrimSpace(l)
+							if strings.HasPrefix(l, "- ") {
+								ws := strings.Trim(strings.TrimPrefix(l, "- "), " \t\r\n\"'\\}{],")
+								if ws != "" {
+									workspace = ws
+									break
+								}
+							}
+						}
+					}
+				}
+				if workspace == "" && strings.Contains(evt.Content, "Command Working Directory:") {
+					parts := strings.Split(evt.Content, "Command Working Directory:")
+					if len(parts) > 1 {
+						lines := strings.Split(parts[1], "\n")
+						if len(lines) > 0 {
+							ws := strings.Trim(lines[0], " \t\r\n\"'\\}{],")
+							if ws != "" {
+								workspace = ws
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Fallback for lines where json.Unmarshal didn't extract or workspace is in tool call JSON
+		if firstPrompt == "" && strings.Contains(line, "<USER_REQUEST>") {
+			parts := strings.Split(line, "<USER_REQUEST>")
+			if len(parts) > 1 {
+				sub := strings.Split(parts[1], "</USER_REQUEST>")
+				raw := strings.TrimSpace(sub[0])
+				raw = strings.ReplaceAll(raw, `\n`, "\n")
+				raw = strings.ReplaceAll(raw, `\"`, `"`)
+				firstPrompt = strings.TrimSpace(raw)
+			}
+			if firstPrompt != "" && snippet == "" {
+				clean := strings.ReplaceAll(firstPrompt, "\n", " ")
+				clean = strings.TrimSpace(clean)
+				runes := []rune(clean)
+				if len(runes) > 55 {
+					snippet = string(runes[:52]) + "..."
+				} else {
+					snippet = string(runes)
+				}
+			}
+		}
+
+		if workspace == "" {
+			if strings.Contains(line, "Active Workspaces:") {
+				parts := strings.Split(line, "Active Workspaces:")
+				if len(parts) > 1 {
+					lines := strings.Split(parts[1], `\n`)
+					for _, l := range lines {
+						l = strings.TrimSpace(l)
+						if strings.HasPrefix(l, "- ") {
+							ws := strings.Trim(strings.TrimPrefix(l, "- "), " \t\r\n\"'\\}{],")
+							if ws != "" {
+								workspace = ws
+								break
+							}
+						}
+					}
+				}
+			}
+			if workspace == "" && strings.Contains(line, "Command Working Directory:") {
+				parts := strings.Split(line, "Command Working Directory:")
+				if len(parts) > 1 {
+					lines := strings.Split(parts[1], `\n`)
+					if len(lines) > 0 {
+						ws := strings.Trim(lines[0], " \t\r\n\"'\\}{],")
+						if ws != "" {
+							workspace = ws
+						}
+					}
+				}
+			}
+			if workspace == "" && (strings.Contains(line, `"Cwd":`) || strings.Contains(line, `"cwd":`)) {
+				idx := strings.Index(line, `"Cwd":`)
+				if idx == -1 {
+					idx = strings.Index(line, `"cwd":`)
+				}
+				if idx != -1 {
+					sub := line[idx+len(`"Cwd":`):]
+					sub = strings.TrimLeft(sub, ` "\'`)
+					endIdx := strings.IndexAny(sub, `"\',`)
+					if endIdx != -1 {
+						ws := strings.Trim(sub[:endIdx], " \t\r\n\"'\\}{],")
+						if strings.HasPrefix(ws, "/") {
+							workspace = ws
+						}
+					}
+				}
+			}
+		}
+
+		if firstPrompt != "" && workspace != "" {
+			break
+		}
+	}
+
+	if snippet == "" && firstPrompt != "" {
+		snippet = firstPrompt
+	}
+
+	return firstPrompt, snippet, workspace
+}
+
+func formatRelativeTime(t time.Time) string {
+	diff := time.Since(t)
+	if diff < 0 {
+		diff = 0
+	}
+	if diff < time.Minute {
+		return "Just now"
+	}
+	if diff < time.Hour {
+		mins := int(diff.Minutes())
+		return fmt.Sprintf("%dm ago", mins)
+	}
+	if diff < 24*time.Hour {
+		hours := int(diff.Hours())
+		return fmt.Sprintf("%dh ago", hours)
+	}
+	if diff < 48*time.Hour {
+		return "Yesterday"
+	}
+	days := int(diff.Hours() / 24)
+	if days < 7 {
+		return fmt.Sprintf("%dd ago", days)
+	}
+	return t.Format("Jan 2")
 }
 
 // ParseLine decodifica uma linha JSONL em um Event estruturado.
