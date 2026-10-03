@@ -50,7 +50,18 @@ When launching automated browser sessions via `agyo browser`:
 
 ---
 
-## 5. Best Practices for Developers Handling Sensitive Data
+## 5. Tool Call Analytics, Secret Redaction & Log Safety
+
+When running `agyo session analytics` or viewing the dashboard's Tool Analytics & Loops tab:
+
+1. **Local-Only Transcript Inspection:** Analytics processes local JSONL session files (`~/.gemini/.../transcript.jsonl`) entirely in-memory on the local machine without remote transmission.
+2. **Automated Secret Redaction:** Commands, summaries, and parameters are automatically sanitized prior to display: common authentication headers (`Authorization: Bearer ...`), personal access tokens (`ghp_...`, `github_pat_...`), AWS credentials (`AKIA...`), and generic passwords/keys are scrubbed and replaced with `[REDACTED]`.
+3. **Truncation & DOM Capping:** Commands and tool call summaries are capped to ~120 characters, lines over 10 MB in transcripts are skipped gracefully, and dashboard display records are limited to the latest 100 tool calls (newest first) to preserve browser performance.
+4. **Prompt Context Protection:** Full user prompt text is excluded from the `/api/all` JSON payload by default to prevent accidental credential or prompt leakage over unauthenticated interfaces, and is only available opt-in via the CLI flag `--show-prompt`.
+
+---
+
+## 6. Best Practices for Developers Handling Sensitive Data
 
 While `agyo` itself collects no personal data, developers using AI agents on enterprise repositories should observe the following guidelines:
 
@@ -60,7 +71,7 @@ While `agyo` itself collects no personal data, developers using AI agents on ent
 
 ---
 
-## 6. Contact & Data Protection Officer (DPO)
+## 7. Contact & Data Protection Officer (DPO)
 
 For questions, security concerns, or privacy inquiries regarding Antigravity Operator:
 

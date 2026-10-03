@@ -874,7 +874,7 @@
                     </div>
                     <div class="metric-badge">
                         <span class="metric-val" style="color: var(--text-muted);">${Number(promptCount)} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">(${Number(promptPct)}%)</span></span>
-                        <span class="metric-lbl">👤 User Prompted</span>
+                        <span class="metric-lbl">💬 Chat-Initiated</span>
                     </div>
                     <div class="metric-badge">
                         <span class="metric-val" style="color: ${escapeHtml(failCount > 0 ? 'var(--accent-red)' : 'var(--text-muted)')};">${Number(failCount)} <span style="font-size: 0.8rem; font-weight: normal;">(${Number(failPct)}%)</span></span>
@@ -892,7 +892,7 @@
 
                 <div class="analytics-ratio-bar">
                     <div class="ratio-segment ratio-auto" style="width: ${Number(autoPct)}%" title="Autonomous Loops: ${Number(autoPct)}%"></div>
-                    <div class="ratio-segment ratio-prompt" style="width: ${Number(promptPct)}%" title="User Prompted: ${Number(promptPct)}%"></div>
+                    <div class="ratio-segment ratio-prompt" style="width: ${Number(promptPct)}%" title="Chat-Initiated: ${Number(promptPct)}%"></div>
                     <div class="ratio-segment ratio-fail" style="width: ${Number(failPct)}%" title="Failed Calls: ${Number(failPct)}%"></div>
                 </div>
             `;
@@ -965,12 +965,15 @@
                 optionsHtml += '<option value="' + escapeHtml(t) + '" ' + escapeHtml(isSel) + '>' + escapeHtml(t) + ' (' + Number(a.tool_counts[t]) + ')</option>';
             }
 
+            const total = a.total_tool_calls || 0;
+            const allLabel = (total > toolCalls.length) ? ('Latest ' + Number(toolCalls.length) + ' of ' + Number(total)) : ('All Calls (' + Number(toolCalls.length) + ')');
+
             container.innerHTML = `
                 <div class="filter-toolbar">
                     <div class="filter-btn-group">
-                        <button class="filter-btn ${escapeHtml(activeFilter === 'all' ? 'active' : '')}" data-filter="all" onclick="setFilter('all')">All Calls (${Number(toolCalls.length)})</button>
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'all' ? 'active' : '')}" data-filter="all" onclick="setFilter('all')">${escapeHtml(allLabel)}</button>
                         <button class="filter-btn ${escapeHtml(activeFilter === 'autonomous' ? 'active' : '')}" data-filter="autonomous" onclick="setFilter('autonomous')">⚡ Autonomous (${Number(a.autonomous_tool_calls || 0)})</button>
-                        <button class="filter-btn ${escapeHtml(activeFilter === 'prompted' ? 'active' : '')}" data-filter="prompted" onclick="setFilter('prompted')">👤 User Prompted (${Number(a.prompted_tool_calls || 0)})</button>
+                        <button class="filter-btn ${escapeHtml(activeFilter === 'prompted' ? 'active' : '')}" data-filter="prompted" onclick="setFilter('prompted')">💬 Chat-Initiated (${Number(a.prompted_tool_calls || 0)})</button>
                         <button class="filter-btn ${escapeHtml(activeFilter === 'failed' ? 'active' : '')}" data-filter="failed" onclick="setFilter('failed')">❌ Failed (${Number(a.failed_tool_calls || 0)})</button>
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
@@ -999,7 +1002,7 @@
                 if (activeFilter === 'failed' && !c.is_failed) return false;
                 if (activeToolSelect !== 'all' && c.tool !== activeToolSelect) return false;
                 if (searchQuery) {
-                    const haystack = (c.tool + ' ' + (c.command || '') + ' ' + (c.target_file || '') + ' ' + (c.summary || '') + ' ' + (c.user_prompt_context || '')).toLowerCase();
+                    const haystack = (c.tool + ' ' + (c.command || '') + ' ' + (c.target_file || '') + ' ' + (c.summary || '')).toLowerCase();
                     if (!haystack.includes(searchQuery)) return false;
                 }
                 return true;
@@ -1020,10 +1023,6 @@
                 if (c.duration_seconds > 0) {
                     durHtml = '<span style="font-size: 0.72rem; color: var(--text-muted);">' + escapeHtml(c.duration_seconds.toFixed(1)) + 's</span>';
                 }
-                let promptCtxHtml = '';
-                if (c.user_prompt_context) {
-                    promptCtxHtml = '<div class="detail-row"><span class="detail-label">Context User Request:</span><div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 3px;">💬 "' + escapeHtml(c.user_prompt_context) + '"</div></div>';
-                }
                 let cmdHtml = '';
                 if (c.command) {
                     cmdHtml = '<div class="detail-row"><span class="detail-label">Command Line:</span><div class="detail-code">' + escapeHtml(c.command) + '</div></div>';
@@ -1043,7 +1042,7 @@
                             <div class="tool-item-left">
                                 <span style="color: var(--text-muted); font-size: 0.75rem; font-family: monospace;">#${Number(c.step_index)}</span>
                                 <span class="tool-pill" style="margin: 0; padding: 2px 8px;"><strong>${escapeHtml(c.tool)}</strong></span>
-                                <span class="badge-mode ${escapeHtml(c.is_prompt_triggered ? 'mode-prompt' : 'mode-auto')}">${escapeHtml(c.is_prompt_triggered ? '👤 Prompt-Triggered' : '⚡ Autonomous')}</span>
+                                <span class="badge-mode ${escapeHtml(c.is_prompt_triggered ? 'mode-prompt' : 'mode-auto')}">${escapeHtml(c.is_prompt_triggered ? '💬 Chat-Initiated' : '⚡ Autonomous')}</span>
                                 <span class="badge-status ${escapeHtml(c.is_failed ? 'status-err' : 'status-ok')}">${escapeHtml(c.is_failed ? '❌ Failed' : '✅ Success')}</span>
                                 ${durHtml}
                             </div>
@@ -1054,7 +1053,6 @@
                         </div>
                         <div class="tool-item-summary">${escapeHtml(c.summary || c.command || c.tool)}</div>
                         <div class="tool-item-details">
-                            ${promptCtxHtml}
                             ${cmdHtml}
                             ${fileHtml}
                             ${failHtml}

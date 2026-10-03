@@ -3,6 +3,7 @@ package analytics
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -232,5 +233,141 @@ func TestExtractCleanPrompt_UTF8(t *testing.T) {
 		if r == '\ufffd' {
 			t.Errorf("found invalid UTF-8 replacement char in result: %q", result)
 		}
+	}
+}
+
+func TestRedactSecrets(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "curl -H 'Authorization: Bearer secret_token_123' https://api.example.com",
+			expected: "curl -H 'Authorization: [REDACTED]' https://api.example.com",
+		},
+		{
+			input:    "export GITHUB_TOKEN=ghp_ABC1234567890abcdefghijklmnopqrstuvwxyz",
+			expected: "export GITHUB_TOKEN=[REDACTED]",
+		},
+		{
+			input:    "aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE",
+			expected: "aws configure set aws_access_key_id [REDACTED]",
+		},
+		{
+			input:    "connect --password: supersecretpassword123",
+			expected: "connect --password: [REDACTED]",
+		},
+	}
+
+	for _, c := range cases {
+		out := RedactSecrets(c.input)
+		if out != c.expected {
+			t.Errorf("RedactSecrets(%q) = %q, expected %q", c.input, out, c.expected)
+		}
+	}
+}
+
+func TestTruncateAndSanitize(t *testing.T) {
+	longStr := "This is a very long string that should definitely exceed the threshold of forty characters."
+	truncated := Truncate(longStr, 40)
+	if len([]rune(truncated)) > 40 {
+		t.Errorf("expected max 40 runes, got %d", len([]rune(truncated)))
+	}
+	if !strings.HasSuffix(truncated, "...") {
+		t.Errorf("expected ellipsis suffix, got %q", truncated)
+	}
+
+	withSecret := "long command with token=supersecretkey123 and extra padding text to make it very long indeed"
+	sanitized := Sanitize(withSecret, 40)
+	if strings.Contains(sanitized, "supersecretkey123") {
+		t.Errorf("expected secret to be redacted, got %q", sanitized)
+	}
+	if len([]rune(sanitized)) > 40 {
+		t.Errorf("expected max 40 runes, got %d", len([]rune(sanitized)))
+	}
+}
+
+func TestAnalyzeTranscript_PromptContextOptIn(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "prompt_optin.jsonl")
+
+	content := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-01T10:00:00Z","content":"<USER_REQUEST>Deploy app to prod</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-01T10:00:05Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"kubectl get pods"}}]}
+{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-10-01T10:00:06Z","content":"The command exited with code 0."}
+`
+	if err := os.WriteFile(logPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// Default: prompt context should be dropped
+	saDefault, err := AnalyzeTranscript(logPath)
+	if err != nil {
+		t.Fatalf("AnalyzeTranscript failed: %v", err)
+	}
+	if len(saDefault.ToolCalls) == 0 {
+		t.Fatalf("expected tool calls")
+	}
+	if saDefault.ToolCalls[0].UserPromptContext != "" {
+		t.Errorf("expected empty UserPromptContext by default, got %q", saDefault.ToolCalls[0].UserPromptContext)
+	}
+
+	// Opt-in: prompt context should be included
+	saOptIn, err := AnalyzeTranscript(logPath, WithPromptContext(true))
+	if err != nil {
+		t.Fatalf("AnalyzeTranscript with prompt context failed: %v", err)
+	}
+	if saOptIn.ToolCalls[0].UserPromptContext != "Deploy app to prod" {
+		t.Errorf("expected 'Deploy app to prod', got %q", saOptIn.ToolCalls[0].UserPromptContext)
+	}
+}
+
+func TestAnalyzeTranscript_LastExitCodeTakesPrecedence(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "last_exit_code.jsonl")
+
+	// Substep had code 1, but final exit was code 0!
+	content := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-01T10:00:00Z","content":"Run script"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-01T10:00:05Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"./script.sh"}}]}
+{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-10-01T10:00:10Z","content":"Substep 1 failed!\nThe command exited with code 1.\nSubstep 2 succeeded!\nThe command exited with code 0."}
+`
+	if err := os.WriteFile(logPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	sa, err := AnalyzeTranscript(logPath)
+	if err != nil {
+		t.Fatalf("AnalyzeTranscript failed: %v", err)
+	}
+
+	if sa.FailedToolCalls != 0 {
+		t.Errorf("expected 0 failed tool calls because final exit was 0, got %d", sa.FailedToolCalls)
+	}
+	if len(sa.ToolCalls) > 0 && sa.ToolCalls[0].IsFailed {
+		t.Errorf("expected tool call to not be marked failed")
+	}
+}
+
+func TestAnalyzeTranscript_OversizedLineSkipped(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "oversized.jsonl")
+
+	// Construct an oversized line (> 10MB) followed by a valid line
+	bigPadding := strings.Repeat("A", 11*1024*1024)
+	oversizedLine := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-10-01T10:00:00Z","content":"` + bigPadding + `"}`
+	validLine := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-01T10:00:05Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"git status"}}]}`
+
+	if err := os.WriteFile(logPath, []byte(oversizedLine+"\n"+validLine+"\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	sa, err := AnalyzeTranscript(logPath)
+	if err != nil {
+		t.Fatalf("expected oversized line to be skipped without error, got: %v", err)
+	}
+	if sa.TotalSteps != 1 {
+		t.Errorf("expected 1 valid step after skipping oversized line, got %d", sa.TotalSteps)
+	}
+	if sa.TotalToolCalls != 1 {
+		t.Errorf("expected 1 tool call, got %d", sa.TotalToolCalls)
 	}
 }

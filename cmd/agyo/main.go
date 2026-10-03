@@ -303,8 +303,9 @@ func runSessionAnalytics(args []string) {
 	analyticsCmd := flag.NewFlagSet("session analytics", flag.ExitOnError)
 	jsonOut := analyticsCmd.Bool("json", false, "Output analytics as JSON")
 	autonomous := analyticsCmd.Bool("autonomous", false, "Filter to show only autonomous loop tool calls")
-	prompted := analyticsCmd.Bool("prompted", false, "Filter to show only prompt-triggered tool calls")
+	prompted := analyticsCmd.Bool("prompted", false, "Filter to show only chat-initiated tool calls")
 	failed := analyticsCmd.Bool("failed", false, "Filter to show only failed tool calls")
+	showPrompt := analyticsCmd.Bool("show-prompt", false, "Include sanitized user prompt context in tool call records")
 	toolName := analyticsCmd.String("tool", "", "Filter to show only calls for a specific tool (e.g. run_command)")
 	_ = analyticsCmd.Parse(args)
 
@@ -352,7 +353,7 @@ func runSessionAnalytics(args []string) {
 		conversationID = tInfo.ConversationID
 	}
 
-	sa, err := analytics.AnalyzeTranscript(transcriptPath)
+	sa, err := analytics.AnalyzeTranscript(transcriptPath, analytics.WithPromptContext(*showPrompt))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error analyzing transcript %s: %v\n", transcriptPath, err)
 		os.Exit(1)

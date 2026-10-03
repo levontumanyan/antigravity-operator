@@ -263,10 +263,12 @@ func (s *Server) getAnalyticsData() *analytics.SessionAnalytics {
 		return nil
 	}
 	sa.ConversationID = tInfo.ConversationID
-
-	// Cap tool calls for dashboard payload to latest 100 while keeping full session aggregate metrics
+	// Cap tool calls for dashboard payload to latest 100 (newest first) while keeping full session aggregate metrics
 	if len(sa.ToolCalls) > 100 {
 		sa.ToolCalls = sa.ToolCalls[len(sa.ToolCalls)-100:]
+	}
+	for i, j := 0, len(sa.ToolCalls)-1; i < j; i, j = i+1, j-1 {
+		sa.ToolCalls[i], sa.ToolCalls[j] = sa.ToolCalls[j], sa.ToolCalls[i]
 	}
 
 	s.cachedAnalytics = sa

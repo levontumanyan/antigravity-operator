@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -68,8 +70,72 @@ type SessionAnalytics struct {
 	DurationSeconds     float64           `json:"duration_seconds"`
 }
 
+var (
+	reAuthHeader    = regexp.MustCompile(`(?i)\bAuthorization:\s*(Bearer\s+|Basic\s+)?[^\s'"]+`)
+	reBearer        = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9\-\._~\+\/]+=*`)
+	reGitHubToken   = regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9_]{10,}|github_pat_[A-Za-z0-9_]{10,})\b`)
+	reAWSAccessKey  = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
+	reGenericSecret = regexp.MustCompile(`(?i)\b(token|key|secret|password|passwd|api[_-]?key|auth[_-]?token)\b(\s*[:=]\s*|\s+)([^\s"'>;&]{4,})`)
+)
+
+// RedactSecrets replaces sensitive tokens, passwords, and API keys with [REDACTED].
+func RedactSecrets(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = reAuthHeader.ReplaceAllString(s, "Authorization: [REDACTED]")
+	s = reBearer.ReplaceAllString(s, "Bearer [REDACTED]")
+	s = reGitHubToken.ReplaceAllString(s, "[REDACTED]")
+	s = reAWSAccessKey.ReplaceAllString(s, "[REDACTED]")
+	s = reGenericSecret.ReplaceAllStringFunc(s, func(match string) string {
+		sub := reGenericSecret.FindStringSubmatch(match)
+		if len(sub) == 4 {
+			return sub[1] + sub[2] + "[REDACTED]"
+		}
+		return match
+	})
+	return s
+}
+
+// Truncate cuts a string to maxRunes, adding an ellipsis if truncated.
+func Truncate(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes-3]) + "..."
+	}
+	return s
+}
+
+// Sanitize applies secret redaction followed by length truncation.
+func Sanitize(s string, maxRunes int) string {
+	return Truncate(RedactSecrets(s), maxRunes)
+}
+
+// AnalyzeOptions configures transcript analysis behavior.
+type AnalyzeOptions struct {
+	IncludePromptContext bool
+}
+
+// AnalyzeOption is a functional option for AnalyzeTranscript.
+type AnalyzeOption func(*AnalyzeOptions)
+
+// WithPromptContext configures whether to include prompt context on tool call records.
+func WithPromptContext(include bool) AnalyzeOption {
+	return func(o *AnalyzeOptions) {
+		o.IncludePromptContext = include
+	}
+}
+
 // AnalyzeTranscript reads a transcript.jsonl file and computes analytics and efficiency alerts.
-func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
+func AnalyzeTranscript(transcriptPath string, opts ...AnalyzeOption) (*SessionAnalytics, error) {
+	var cfg AnalyzeOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	file, err := os.Open(transcriptPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open transcript: %w", err)
@@ -86,11 +152,11 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 	}
 
 	commandFreq := make(map[string]int)
+	maxConsecutive := make(map[string]int)
 	taskPollingFreq := make(map[string]int)
 
-	scanner := bufio.NewScanner(file)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 10*1024*1024)
+	reader := bufio.NewReaderSize(file, 64*1024)
+	const maxLineBytes = 10 * 1024 * 1024 // 10 MB line limit
 
 	var lastCommand string
 	var consecutiveCommandCount int
@@ -99,8 +165,39 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 	var pendingToolIndices []int
 	toolCallCounter := 0
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		var line []byte
+		var oversized bool
+		for {
+			chunk, isPrefix, err := reader.ReadLine()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return nil, fmt.Errorf("failed to read transcript: %w", err)
+			}
+			if !oversized {
+				if len(line)+len(chunk) > maxLineBytes {
+					oversized = true
+					line = nil
+				} else {
+					line = append(line, chunk...)
+				}
+			}
+			if !isPrefix {
+				break
+			}
+		}
+		if oversized {
+			continue // skip line over 10MB gracefully
+		}
+		if len(line) == 0 {
+			if _, err := reader.Peek(1); err != nil {
+				break
+			}
+			continue
+		}
+
 		evt, err := watcher.ParseLine(line)
 		if err != nil {
 			continue
@@ -172,6 +269,11 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 					consecutiveCommandCount = 0
 				}
 
+				var promptCtx string
+				if cfg.IncludePromptContext {
+					promptCtx = currentPrompt
+				}
+
 				record := ToolCallRecord{
 					ID:                toolCallCounter,
 					StepIndex:         evt.StepIndex,
@@ -179,7 +281,7 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 					IsPromptTriggered: isPromptTurn,
 					IsAutonomous:      !isPromptTurn,
 					Timestamp:         evt.CreatedAt,
-					UserPromptContext: currentPrompt,
+					UserPromptContext: promptCtx,
 				}
 
 				if isPromptTurn {
@@ -197,7 +299,7 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 					}
 					if err := json.Unmarshal(call.Args, &args); err == nil && args.CommandLine != "" {
 						cmd := strings.Trim(strings.TrimSpace(args.CommandLine), "\"'")
-						record.Command = cmd
+						record.Command = Sanitize(cmd, 120)
 						if sa.Workspace == "" && args.Cwd != "" {
 							cleanCwd := strings.Trim(strings.TrimSpace(args.Cwd), "\"'")
 							if cleanCwd != "" {
@@ -205,37 +307,44 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 							}
 						}
 						if args.ToolSummary != "" {
-							record.Summary = args.ToolSummary
+							record.Summary = Sanitize(args.ToolSummary, 120)
 						} else {
-							record.Summary = cmd
+							record.Summary = record.Command
 						}
 						commandFreq[cmd]++
 
 						if cmd == lastCommand {
 							consecutiveCommandCount++
-							if consecutiveCommandCount >= 3 {
-								msg := fmt.Sprintf("Consecutive command loop: %q executed %d times in a row", cmd, consecutiveCommandCount)
-								updated := false
-								for i := range sa.Repetitions {
-									if sa.Repetitions[i].Type == "command_loop" && sa.Repetitions[i].Target == cmd {
-										sa.Repetitions[i].Count = consecutiveCommandCount
-										sa.Repetitions[i].Message = msg
-										updated = true
-										break
-									}
-								}
-								if !updated {
-									sa.Repetitions = append(sa.Repetitions, RepetitionAlert{
-										Type:    "command_loop",
-										Target:  cmd,
-										Count:   consecutiveCommandCount,
-										Message: msg,
-									})
-								}
-							}
 						} else {
 							lastCommand = cmd
 							consecutiveCommandCount = 1
+						}
+						if consecutiveCommandCount > maxConsecutive[cmd] {
+							maxConsecutive[cmd] = consecutiveCommandCount
+						}
+
+						if consecutiveCommandCount >= 3 {
+							sanitizedCmd := Sanitize(cmd, 120)
+							msg := fmt.Sprintf("Consecutive command loop: %q executed %d times in a row", sanitizedCmd, consecutiveCommandCount)
+							updated := false
+							for i := range sa.Repetitions {
+								if sa.Repetitions[i].Type == "command_loop" && sa.Repetitions[i].Target == sanitizedCmd {
+									if consecutiveCommandCount > sa.Repetitions[i].Count {
+										sa.Repetitions[i].Count = consecutiveCommandCount
+									}
+									sa.Repetitions[i].Message = msg
+									updated = true
+									break
+								}
+							}
+							if !updated {
+								sa.Repetitions = append(sa.Repetitions, RepetitionAlert{
+									Type:    "command_loop",
+									Target:  sanitizedCmd,
+									Count:   consecutiveCommandCount,
+									Message: msg,
+								})
+							}
 						}
 					}
 
@@ -246,7 +355,7 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 					}
 					if err := json.Unmarshal(call.Args, &args); err == nil && args.AbsolutePath != "" {
 						cleanPath := strings.Trim(strings.TrimSpace(args.AbsolutePath), "\"'")
-						record.TargetFile = cleanPath
+						record.TargetFile = Sanitize(cleanPath, 120)
 						if sa.Workspace == "" && cleanPath != "" && strings.HasPrefix(cleanPath, "/") {
 							for d := filepath.Dir(cleanPath); d != "/" && d != "." && len(d) > 1; d = filepath.Dir(d) {
 								if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
@@ -256,9 +365,9 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 							}
 						}
 						if args.ToolSummary != "" {
-							record.Summary = args.ToolSummary
+							record.Summary = Sanitize(args.ToolSummary, 120)
 						} else {
-							record.Summary = "Read " + cleanPath
+							record.Summary = "Read " + record.TargetFile
 						}
 						sa.FilesRead[cleanPath]++
 					}
@@ -271,13 +380,13 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 					}
 					if err := json.Unmarshal(call.Args, &args); err == nil && args.TargetFile != "" {
 						cleanTarget := strings.Trim(strings.TrimSpace(args.TargetFile), "\"'")
-						record.TargetFile = cleanTarget
+						record.TargetFile = Sanitize(cleanTarget, 120)
 						if args.ToolSummary != "" {
-							record.Summary = args.ToolSummary
+							record.Summary = Sanitize(args.ToolSummary, 120)
 						} else if args.Description != "" {
-							record.Summary = args.Description
+							record.Summary = Sanitize(args.Description, 120)
 						} else {
-							record.Summary = "Edit " + cleanTarget
+							record.Summary = "Edit " + record.TargetFile
 						}
 						sa.FilesModified[cleanTarget]++
 					}
@@ -289,7 +398,11 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 						ToolSummary string `json:"toolSummary"`
 					}
 					if err := json.Unmarshal(call.Args, &args); err == nil {
-						record.Summary = fmt.Sprintf("Task %s (%s)", args.Action, args.TaskId)
+						summary := fmt.Sprintf("Task %s (%s)", args.Action, args.TaskId)
+						if args.ToolSummary != "" {
+							summary = args.ToolSummary
+						}
+						record.Summary = Sanitize(summary, 120)
 						if args.Action == "status" && args.TaskId != "" {
 							taskPollingFreq[args.TaskId]++
 						}
@@ -302,11 +415,11 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 						TimerCondition  string `json:"TimerCondition"`
 					}
 					if err := json.Unmarshal(call.Args, &args); err == nil {
-						record.Summary = fmt.Sprintf("Timer (%ds: %s)", args.DurationSeconds, args.Prompt)
+						record.Summary = Sanitize(fmt.Sprintf("Timer (%ds: %s)", args.DurationSeconds, args.Prompt), 120)
 					}
 
 				default:
-					record.Summary = call.Name
+					record.Summary = Sanitize(call.Name, 120)
 				}
 
 				recIndex := len(sa.ToolCalls)
@@ -331,19 +444,28 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 					isFailed = true
 					for _, l := range strings.Split(content, "\n") {
 						if strings.Contains(l, "Encountered error in tool execution") {
-							failureMsg = strings.TrimSpace(l)
+							failureMsg = Sanitize(strings.TrimSpace(l), 120)
 							break
 						}
 					}
 				} else {
+					var lastExitCodeStr string
+					var lastExitCodeMsg string
 					for _, l := range strings.Split(content, "\n") {
 						trimmed := strings.TrimSpace(l)
 						if strings.HasPrefix(trimmed, "The command exited with code ") {
 							codeStr := strings.TrimSuffix(strings.TrimPrefix(trimmed, "The command exited with code "), ".")
-							if codeStr != "0" {
-								isFailed = true
-								failureMsg = trimmed
-							}
+							lastExitCodeStr = codeStr
+							lastExitCodeMsg = trimmed
+						}
+					}
+					if lastExitCodeStr != "" {
+						if lastExitCodeStr != "0" {
+							isFailed = true
+							failureMsg = Sanitize(lastExitCodeMsg, 120)
+						} else {
+							isFailed = false
+							failureMsg = ""
 						}
 					}
 				}
@@ -367,10 +489,6 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read transcript: %w", err)
-	}
-
 	if !sa.StartTime.IsZero() && !sa.LastActiveTime.IsZero() {
 		sa.DurationSeconds = sa.LastActiveTime.Sub(sa.StartTime).Seconds()
 	}
@@ -384,26 +502,35 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 
 	for _, cmd := range cmdKeys {
 		count := commandFreq[cmd]
-		sa.TopCommands = append(sa.TopCommands, CommandStat{Command: cmd, Count: count})
+		sanitizedCmd := Sanitize(cmd, 120)
+		sa.TopCommands = append(sa.TopCommands, CommandStat{Command: sanitizedCmd, Count: count})
 		if count >= 3 {
+			maxRun := maxConsecutive[cmd]
 			found := false
 			for i := range sa.Repetitions {
-				if sa.Repetitions[i].Type == "command_loop" && sa.Repetitions[i].Target == cmd {
+				if sa.Repetitions[i].Type == "command_loop" && sa.Repetitions[i].Target == sanitizedCmd {
 					found = true
 					if count > sa.Repetitions[i].Count {
-						consecutiveCount := sa.Repetitions[i].Count
 						sa.Repetitions[i].Count = count
-						sa.Repetitions[i].Message = fmt.Sprintf("Repetitive command: %q executed %d times across session (%d in a row)", cmd, count, consecutiveCount)
+					}
+					if maxRun >= 3 {
+						sa.Repetitions[i].Message = fmt.Sprintf("Repetitive command: %q executed %d times across session (%d in a row)", sanitizedCmd, count, maxRun)
+					} else {
+						sa.Repetitions[i].Message = fmt.Sprintf("Repetitive command: %q executed %d times across session", sanitizedCmd, count)
 					}
 					break
 				}
 			}
 			if !found {
+				msg := fmt.Sprintf("Repetitive command: %q executed %d times across session", sanitizedCmd, count)
+				if maxRun >= 3 {
+					msg = fmt.Sprintf("Repetitive command: %q executed %d times across session (%d in a row)", sanitizedCmd, count, maxRun)
+				}
 				sa.Repetitions = append(sa.Repetitions, RepetitionAlert{
 					Type:    "command_loop",
-					Target:  cmd,
+					Target:  sanitizedCmd,
 					Count:   count,
-					Message: fmt.Sprintf("Repetitive command: %q executed %d times across session", cmd, count),
+					Message: msg,
 				})
 			}
 		}
@@ -428,11 +555,12 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 	for _, taskID := range taskKeys {
 		count := taskPollingFreq[taskID]
 		if count >= 3 {
+			sanitizedTask := Sanitize(taskID, 120)
 			sa.Repetitions = append(sa.Repetitions, RepetitionAlert{
 				Type:    "polling_loop",
-				Target:  taskID,
+				Target:  sanitizedTask,
 				Count:   count,
-				Message: fmt.Sprintf("Polling loop: status of %q checked %d times", taskID, count),
+				Message: fmt.Sprintf("Polling loop: status of %q checked %d times", sanitizedTask, count),
 			})
 		}
 	}
@@ -447,11 +575,12 @@ func AnalyzeTranscript(transcriptPath string) (*SessionAnalytics, error) {
 	for _, file := range fileKeys {
 		count := sa.FilesRead[file]
 		if count >= 4 {
+			sanitizedFile := Sanitize(file, 120)
 			sa.Repetitions = append(sa.Repetitions, RepetitionAlert{
 				Type:    "file_reread",
-				Target:  file,
+				Target:  sanitizedFile,
 				Count:   count,
-				Message: fmt.Sprintf("Frequent file re-read: %s inspected %d times", file, count),
+				Message: fmt.Sprintf("Frequent file re-read: %s inspected %d times", sanitizedFile, count),
 			})
 		}
 	}
@@ -480,11 +609,7 @@ func extractCleanPrompt(content string) string {
 		}
 	}
 	content = strings.ReplaceAll(content, "\n", " ")
-	runes := []rune(content)
-	if len(runes) > 60 {
-		return string(runes[:57]) + "..."
-	}
-	return string(runes)
+	return Sanitize(content, 60)
 }
 
 func hasRepetitionTarget(alerts []RepetitionAlert, target string) bool {
@@ -543,7 +668,7 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 		autoPct = (sa.AutonomousToolCalls * 100) / sa.TotalToolCalls
 		promptPct = (sa.PromptedToolCalls * 100) / sa.TotalToolCalls
 	}
-	sb.WriteString(fmt.Sprintf("🛠️  Total Tool Calls: %d [⚡ Autonomous: %d (%d%%) | 👤 User Prompted: %d (%d%%)]\n",
+	sb.WriteString(fmt.Sprintf("🛠️  Total Tool Calls: %d [⚡ Autonomous: %d (%d%%) | 💬 Chat-Initiated: %d (%d%%)]\n",
 		sa.TotalToolCalls, sa.AutonomousToolCalls, autoPct, sa.PromptedToolCalls, promptPct))
 
 	if sa.FailedToolCalls > 0 {
@@ -613,7 +738,7 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 		if opt.AutonomousOnly {
 			filterLabel = "⚡ Autonomous Loop Tool Calls"
 		} else if opt.PromptedOnly {
-			filterLabel = "👤 Prompt-Triggered Tool Calls"
+			filterLabel = "💬 Chat-Initiated Tool Calls"
 		} else if opt.FailedOnly {
 			filterLabel = "❌ Failed Tool Calls"
 		}
@@ -629,9 +754,12 @@ func (sa *SessionAnalytics) FormatCLI(opts ...FilterOptions) string {
 			}
 			modeTag := "[auto]"
 			if c.IsPromptTriggered {
-				modeTag = "[user]"
+				modeTag = "[chat]"
 			}
 			sb.WriteString(fmt.Sprintf("   %s %-6s Step #%-3d %-16s %s\n", statusIcon, modeTag, c.StepIndex, c.Tool, c.Summary))
+			if c.UserPromptContext != "" {
+				sb.WriteString(fmt.Sprintf("      ↳ 💬 Prompt: %s\n", c.UserPromptContext))
+			}
 			if c.IsFailed && c.FailureReason != "" {
 				sb.WriteString(fmt.Sprintf("      ↳ ❌ Error: %s\n", c.FailureReason))
 			}

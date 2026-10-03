@@ -269,6 +269,14 @@ agyo session list
 # Restore a past archived session into active memory (creates safety backup automatically):
 agyo session restore session-2026-10-01-113140.md
 agyo session restore latest
+
+# Analyze tool call distributions, efficiency, and loop detection:
+agyo session analytics
+agyo session analytics --autonomous   # Show only autonomous loops
+agyo session analytics --prompted     # Show chat-initiated tool calls
+agyo session analytics --failed       # Show failed tool executions
+agyo session analytics --show-prompt  # Include sanitized user prompt context
+agyo session analytics --json         # Structured JSON for reporting
 ```
 
 ### 4. Filesystem Safety Net & Atomic Checkpoints (`checkpoint` & `rollback`)
@@ -292,7 +300,10 @@ When running `agyo init`, a pre-configured `.agentignore` blacklist is automatic
 - Excludes large dumps, datasets, minified bundles (`*.min.js`), and local `.env` files
 
 ### 6. Live Web Dashboard & Local Inspector (`dashboard`)
-Spawns a pure-Go zero-dependency web dashboard on `http://127.0.0.1:8080` with dark-mode UI, live session progress, doctor diagnostics, active Chrome tabs, and live activity feeds:
+Spawns a pure-Go zero-dependency web dashboard on `http://127.0.0.1:8080` with dark-mode UI, live session progress, doctor diagnostics, active Chrome tabs, live activity feeds, and a dedicated **🛠️ Tool Analytics & Loops** tab:
+- **Efficiency & Loop Detection:** Detects repeated command loops (`>= 3` in a row), task polling spirals, and redundant file re-reads.
+- **Privacy & Secret Redaction:** Bearer tokens, GitHub personal access tokens, AWS keys, and passwords are automatically sanitized (`[REDACTED]`) and truncated to 120 characters.
+- **Display Optimization:** Capped to the latest 100 tool calls (newest first) to ensure fluid DOM rendering regardless of transcript length.
 ```bash
 # Launch dashboard and automatically open default browser:
 agyo dashboard
